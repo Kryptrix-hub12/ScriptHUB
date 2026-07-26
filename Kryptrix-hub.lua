@@ -1,8 +1,5 @@
 -- ================================================================
---  Quantum Base Farmer  ·  LocalScript
---  Features: Fast pathfinding, ignores own base, laser detection,
---            Quantum Cloner swap when locked, dash to brainrot if open
---  UI: Modern glass, movable
+--  Quantum Base Farmer v2 (Fixed Scan + Own‑Base Detection)
 -- ================================================================
 
 local Players = game:GetService("Players")
@@ -22,9 +19,16 @@ if playerGui:FindFirstChild("QuantumFarmer") then
     playerGui.QuantumFarmer:Destroy()
 end
 
+-- ===================== SCAN PLAYER ATTRIBUTES =====================
+print("=== Player Attributes ===")
+for attr, val in pairs(player:GetAttributes()) do
+    print(attr, "=", val)
+end
+print("=========================")
+
 -- ===================== CONFIG =====================
 local DASH_SPEED = 500
-local DISTANCE_OWN_PLOT = 30   -- ignore plots within this distance (your own base)
+local OWN_PLOT_DISTANCE = 10   -- ignore plots within 10 studs (your own base)
 
 -- ===================== LOAD GAME DATA =====================
 local AnimalsData = {}
@@ -44,12 +48,25 @@ local bestTier = 0
 local highlight = nil
 local dashConn = nil
 local speedBypass = nil
+local ownPlotUUID = nil   -- will be set if we find the player's plot ID
 
 -- ===================== HELPERS =====================
 local function getCharParts()
     local char = player.Character
     if not char then return nil, nil end
     return char:FindFirstChild("HumanoidRootPart"), char:FindFirstChildOfClass("Humanoid")
+end
+
+local function getPlotPosition(plot)
+    if plot.PrimaryPart then return plot.PrimaryPart.Position end
+    -- Find any BasePart child
+    for _, child in ipairs(plot:GetChildren()) do
+        if child:IsA("BasePart") then
+            return child.Position
+        end
+    end
+    -- Last resort: pivot
+    return plot:GetPivot().Position
 end
 
 -- ===================== SPEED BYPASS =====================
@@ -76,27 +93,32 @@ local function scanBestTarget()
     bestBrainrot = nil
     bestBrainrotPrice = 0
     bestTier = 0
-    local myPos = (getCharParts()) or Vector3.zero
+    local myHrp, _ = getCharParts()
+    local myPos = myHrp and myHrp.Position or Vector3.zero
 
     for _, plot in ipairs(CollectionService:GetTagged("Plot")) do
-        local primary = plot.PrimaryPart or plot:FindFirstChildWhichIsA("BasePart")
-        if primary then
-            local dist = (myPos - primary.Position).Magnitude
-            if dist < DISTANCE_OWN_PLOT then continue end  -- skip own base
+        local plotPos = getPlotPosition(plot)
+        local dist = (myPos - plotPos).Magnitude
+
+        -- Skip own plot: either by UUID or by distance (if we're standing in it)
+        if ownPlotUUID and plot.Name == ownPlotUUID then
+            continue
+        elseif ownPlotUUID == nil and dist < OWN_PLOT_DISTANCE then
+            -- Assume this is our own base (since we're inside it)
+            continue
         end
+
         local tier = plot:GetAttribute("Tier") or 0
         if tier > bestTier then
             bestTier = tier
             bestPlot = plot
             bestBrainrot = nil
             bestBrainrotPrice = 0
-        elseif tier == bestTier and bestPlot then
-            -- same tier, compare best brainrot price
         end
     end
 
     if bestPlot then
-        -- find best brainrot inside this plot
+        -- Find best brainrot inside this plot
         for _, desc in ipairs(bestPlot:GetDescendants()) do
             if CollectionService:HasTag(desc, "Animal") then
                 local index = desc:GetAttribute("Index")
@@ -133,17 +155,16 @@ local function isBaseLocked(plot)
     local myHrp, _ = getCharParts()
     if not myHrp then return false end
     local laserHitbox = plot:FindFirstChild("PlotLaserHitbox", true)
-    local targetPos = laserHitbox and laserHitbox.Position or plot:GetPivot().Position
+    if not laserHitbox then return false end
+    local targetPos = laserHitbox.Position
     local rayOrigin = myHrp.Position
     local rayDir = (targetPos - rayOrigin).Unit * 1000
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Blacklist
     rayParams.FilterDescendantsInstances = {player.Character}
     local rayResult = Workspace:Raycast(rayOrigin, rayDir, rayParams)
-    if rayResult then
-        local hitPart = rayResult.Instance
-        -- If the hit part is the laser hitbox itself, it's locked
-        if hitPart.Name == "PlotLaserHitbox" or hitPart:FindFirstChild("PlotLaserHitbox") then
+    if rayResult and rayResult.Instance:IsDescendantOf(plot) then
+        if rayResult.Instance.Name == "PlotLaserHitbox" then
             return true
         end
     end
@@ -152,8 +173,7 @@ end
 
 -- ===================== QUANTUM CLONER SWAP =====================
 local function swapWithClone()
-    -- Ensure Quantum Cloner tool is in backpack
-    local tool = player.Backpack:FindFirstChild("Quantum Cloner") or player.Character:FindFirstChild("Quantum Cloner")
+    local tool = player.Backpack:FindFirstChild("Quantum Cloner") or player.Character and player.Character:FindFirstChild("Quantum Cloner")
     if not tool then
         local toolTemplate = ReplicatedStorage:FindFirstChild("Items"):FindFirstChild("Quantum Cloner")
         if toolTemplate then
@@ -164,17 +184,14 @@ local function swapWithClone()
     end
     if not tool then return end
 
-    -- Equip the tool
     local hum = getCharParts()
     if hum then hum:EquipTool(tool) end
     task.wait(0.2)
 
-    -- Fire the UseItem remote (this creates the clone)
     local Net = require(ReplicatedStorage.Packages.Net)
     Net:RemoteEvent("UseItem"):FireServer()
     print("[Farmer] Quantum Cloner activated – waiting for clone...")
 
-    -- Wait for the clone to appear
     local cloneName = player.UserId .. "_Clone"
     local clone
     repeat
@@ -183,9 +200,7 @@ local function swapWithClone()
     until clone
     print("[Farmer] Clone found – swapping!")
 
-    -- Swap (teleport to clone)
-    local teleportRemote = Net:RemoteEvent("QuantumCloner/OnTeleport")
-    teleportRemote:FireServer()
+    Net:RemoteEvent("QuantumCloner/OnTeleport"):FireServer()
     print("[Farmer] Swapped with clone!")
 end
 
@@ -232,7 +247,6 @@ local function dashTo(targetPos, onArrive)
             end
         end)
     else
-        -- Fallback straight dash
         dashConn = RunService.Heartbeat:Connect(function()
             local hrpNow, humNow = getCharParts()
             if not hrpNow or not humNow then dashConn:Disconnect(); return end
@@ -257,20 +271,17 @@ local function goToBestTarget()
     local locked = isBaseLocked(bestPlot)
 
     if locked and laserHitbox then
-        -- Dash to laser line, then swap
         local laserPos = laserHitbox.Position
         dashTo(laserPos, function()
             task.wait(0.2)
             swapWithClone()
         end)
     else
-        -- Dash directly to best brainrot
         local targetPos
         if bestBrainrot then
             targetPos = bestBrainrot:GetPivot().Position
         else
-            -- fallback to laser line or plot center
-            targetPos = laserHitbox and laserHitbox.Position or bestPlot:GetPivot().Position
+            targetPos = laserHitbox and laserHitbox.Position or getPlotPosition(bestPlot)
         end
         dashTo(targetPos)
     end
@@ -458,4 +469,13 @@ TweenService:Create(main, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingD
     Size = UDim2.new(0,280,0,150)
 }):Play()
 
-print("[Quantum Farmer] Ready – auto‑scan, dash, laser detection, clone swap!")
+-- Try to find own plot UUID from player attributes
+local plotIdAttr = player:GetAttribute("PlotId") or player:GetAttribute("PlotUUID") or player:GetAttribute("Plot")
+if plotIdAttr then
+    ownPlotUUID = tostring(plotIdAttr)
+    print("[Farmer] Own plot ID found: " .. ownPlotUUID)
+else
+    print("[Farmer] No PlotId attribute found. Using distance-based own-plot detection.")
+end
+
+print("[Quantum Farmer] Ready – toggle Auto Scan, then dash to best base!")
