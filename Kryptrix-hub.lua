@@ -1,9 +1,8 @@
-
 -- ================================================================
---  Auto Brainrot Farmer  ·  LocalScript
---  Scans all dropped brainrots, finds the most valuable,
---  highlights it, and teleports you to it.
---  UI: Modern glass, movable, single toggle + TP button
+--  Brainrot Base Farmer  ·  LocalScript
+--  Finds the highest‑tier base, dashes to its laser line at 500 spd
+--  Speed bypass enforced, pathfinding for obstacles, ESP highlight
+--  UI: Modern glass, movable
 -- ================================================================
 
 local Players = game:GetService("Players")
@@ -13,30 +12,26 @@ local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
 local Workspace = game:GetService("Workspace")
 local CollectionService = game:GetService("CollectionService")
+local PathfindingService = game:GetService("PathfindingService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 -- Clean old
-if playerGui:FindFirstChild("BrainrotFarmer") then
-    playerGui.BrainrotFarmer:Destroy()
+if playerGui:FindFirstChild("BaseFarmer") then
+    playerGui.BaseFarmer:Destroy()
 end
 
--- ===================== LOAD GAME DATA =====================
-local AnimalsData = {}
-pcall(function()
-    AnimalsData = require(ReplicatedStorage.Datas.Animals)
-end)
-if not next(AnimalsData) then
-    warn("Could not load Datas.Animals – prices won't be available")
-end
+-- ===================== CONFIG =====================
+local DASH_SPEED = 500        -- super‑fast dash speed
 
 -- ===================== STATE =====================
 local active = false
-local bestBrainrot = nil      -- the model with the highest price
-local bestPrice = 0
+local bestPlot = nil
+local bestTier = 0
 local highlight = nil
-local scanConnection = nil
+local dashConn = nil
+local speedBypass = nil       -- Heartbeat that forces WalkSpeed
 
 -- ===================== HELPERS =====================
 local function getCharParts()
@@ -45,107 +40,164 @@ local function getCharParts()
     return char:FindFirstChild("HumanoidRootPart"), char:FindFirstChildOfClass("Humanoid")
 end
 
--- ===================== SCAN & HIGHLIGHT =====================
-local function scanBrainrots()
-    -- Reset old highlight
-    if highlight then
-        highlight:Destroy()
-        highlight = nil
-    end
-    bestBrainrot = nil
-    bestPrice = 0
-
-    local animals = CollectionService:GetTagged("Animal")
-    for _, model in ipairs(animals) do
-        local index = model:GetAttribute("Index")
-        if index and AnimalsData[index] then
-            local price = AnimalsData[index].Price or 0
-            if price > bestPrice then
-                bestPrice = price
-                bestBrainrot = model
+-- ===================== SPEED BYPASS =====================
+local function startSpeedBypass()
+    if speedBypass then speedBypass:Disconnect() end
+    speedBypass = RunService.Heartbeat:Connect(function()
+        local _, hum = getCharParts()
+        if hum then
+            -- Bypass the game's speed clamping
+            hum.WalkSpeed = DASH_SPEED
+            -- If the game sets the "Stealing" attribute to slow us down, override it
+            if player:GetAttribute("Stealing") then
+                player:SetAttribute("Stealing", false)
             end
+        end
+    end)
+end
+
+local function stopSpeedBypass()
+    if speedBypass then speedBypass:Disconnect(); speedBypass = nil end
+end
+
+-- ===================== FIND BEST PLOT =====================
+local function scanBestPlot()
+    bestPlot = nil
+    bestTier = 0
+    for _, plot in ipairs(CollectionService:GetTagged("Plot")) do
+        local tier = plot:GetAttribute("Tier") or 0
+        if tier > bestTier then
+            bestTier = tier
+            bestPlot = plot
         end
     end
 
-    if bestBrainrot then
-        -- Create highlight on the best brainrot
-        local hrp = bestBrainrot:FindFirstChild("HumanoidRootPart") or bestBrainrot.PrimaryPart or bestBrainrot:FindFirstChildWhichIsA("BasePart")
-        if hrp then
+    -- Update highlight
+    if highlight then highlight:Destroy(); highlight = nil end
+    if bestPlot then
+        local primary = bestPlot:FindFirstChild("PlotLaserHitbox", true) or bestPlot.PrimaryPart or bestPlot:FindFirstChildWhichIsA("BasePart")
+        if primary then
             highlight = Instance.new("Highlight")
-            highlight.Name = "BestBrainrot"
-            highlight.Adornee = hrp
+            highlight.Name = "BestBase"
+            highlight.Adornee = primary
             highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-            highlight.FillTransparency = 0.5
-            highlight.OutlineColor = Color3.fromRGB(255, 215, 0)  -- gold
+            highlight.FillTransparency = 0.6
+            highlight.OutlineColor = Color3.fromRGB(255,215,0)  -- gold
             highlight.OutlineTransparency = 0
-            highlight.Parent = hrp
+            highlight.Parent = primary
         end
     end
 end
 
--- ===================== TELEPORT =====================
-local function teleportToBest()
-    if not bestBrainrot then
-        print("[Farmer] No valuable brainrot found!")
-        return
-    end
+-- ===================== DASH TO LASER LINE =====================
+local function dashToBestBase()
+    if not bestPlot then return end
     local hrp, hum = getCharParts()
     if not hrp or not hum then return end
 
-    local targetPos = bestBrainrot:GetPivot().Position
-    -- Anti‑ragdoll during teleport
-    local ragdollConn
-    ragdollConn = hum.StateChanged:Connect(function(_, newState)
-        if newState == Enum.HumanoidStateType.Physics then
-            hum.PlatformStand = false
-        end
+    -- Find the laser hitbox (the entrance line)
+    local laserHitbox = bestPlot:FindFirstChild("PlotLaserHitbox", true)
+    local targetPos
+    if laserHitbox and laserHitbox:IsA("BasePart") then
+        targetPos = laserHitbox.Position
+    else
+        -- Fallback: use the plot's primary part
+        targetPos = bestPlot:GetPivot().Position
+    end
+
+    -- Cancel any existing dash
+    if dashConn then dashConn:Disconnect() end
+
+    -- Start speed bypass
+    startSpeedBypass()
+
+    -- Use pathfinding to get to the target
+    local path = PathfindingService:CreatePath({
+        AgentRadius = 2,
+        AgentHeight = 5,
+        AgentCanJump = true,
+        AgentMaxSlope = 45,
+        WaypointSpacing = 3,
+    })
+    local success = pcall(function()
+        path:ComputeAsync(hrp.Position, targetPos)
     end)
-    -- Instant teleport
-    hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 3, 0))  -- slightly above the brainrot
-    hrp.Velocity = Vector3.zero
-    task.delay(0.5, function()
-        if ragdollConn then ragdollConn:Disconnect() end
-    end)
-    print("[Farmer] Teleported to " .. bestBrainrot:GetAttribute("Index") .. " (price: " .. bestPrice .. ")")
+    if success and path.Status == Enum.PathStatus.Success then
+        local waypoints = path:GetWaypoints()
+        local idx = 1
+        dashConn = RunService.Heartbeat:Connect(function()
+            local hrpNow, humNow = getCharParts()
+            if not hrpNow or not humNow then dashConn:Disconnect(); return end
+
+            local dist = (hrpNow.Position - targetPos).Magnitude
+            if dist <= 5 then
+                hrpNow.Velocity = Vector3.new(0, hrpNow.Velocity.Y, 0)
+                dashConn:Disconnect()
+                stopSpeedBypass()
+                print("[Farmer] Arrived at base!")
+                return
+            end
+
+            if idx <= #waypoints then
+                local wp = waypoints[idx]
+                if (hrpNow.Position - wp.Position).Magnitude < 5 then
+                    idx = idx + 1
+                else
+                    humNow:MoveTo(wp.Position)
+                end
+            else
+                humNow:MoveTo(targetPos)
+            end
+        end)
+    else
+        -- Fallback: straight line dash
+        dashConn = RunService.Heartbeat:Connect(function()
+            local hrpNow, humNow = getCharParts()
+            if not hrpNow or not humNow then dashConn:Disconnect(); return end
+
+            local dist = (hrpNow.Position - targetPos).Magnitude
+            if dist <= 5 then
+                hrpNow.Velocity = Vector3.new(0, hrpNow.Velocity.Y, 0)
+                dashConn:Disconnect()
+                stopSpeedBypass()
+                print("[Farmer] Arrived at base!")
+                return
+            end
+            local dir = (targetPos - hrpNow.Position).Unit
+            hrpNow.Velocity = Vector3.new(dir.X * DASH_SPEED, hrpNow.Velocity.Y, dir.Z * DASH_SPEED)
+        end)
+    end
 end
 
 -- ===================== HEARTBEAT SCANNER =====================
-local function startScanning()
-    if scanConnection then return end
-    scanConnection = RunService.Heartbeat:Connect(function()
-        if not active then return end
-        scanBrainrots()
-        -- Update highlight every 5 seconds to avoid performance hit
-        -- We scan once per frame but only create highlight when best changes
-    end)
-end
-
-local function stopScanning()
-    if scanConnection then scanConnection:Disconnect(); scanConnection = nil end
-    if highlight then highlight:Destroy(); highlight = nil end
-    bestBrainrot = nil
-    bestPrice = 0
-end
+local scanTimer = 0
+RunService.Heartbeat:Connect(function(dt)
+    if not active then return end
+    scanTimer = scanTimer + dt
+    if scanTimer >= 2 then   -- scan every 2 seconds
+        scanTimer = 0
+        scanBestPlot()
+    end
+end)
 
 -- ===================== GUI =====================
 local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "BrainrotFarmer"
+screenGui.Name = "BaseFarmer"
 screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = playerGui
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 240, 0, 120)
-main.Position = UDim2.new(0.5, -120, 0.3, 0)
+main.Size = UDim2.new(0, 260, 0, 140)
+main.Position = UDim2.new(0.5, -130, 0.3, 0)
 main.BackgroundColor3 = Color3.fromRGB(25,25,30)
 main.BackgroundTransparency = 0.25
 main.BorderSizePixel = 0
 main.ClipsDescendants = true
 main.Parent = screenGui
 Instance.new("UICorner", main).CornerRadius = UDim.new(0,12)
-Instance.new("UIStroke", main).Color = Color3.fromRGB(255,215,0)  -- gold accent
+Instance.new("UIStroke", main).Color = Color3.fromRGB(255,215,0)
 
--- Blur background
 local blur = Instance.new("ImageLabel", main)
 blur.Size = UDim2.new(1,0,1,0)
 blur.BackgroundTransparency = 1
@@ -154,7 +206,6 @@ blur.ImageTransparency = 0.8
 blur.ScaleType = Enum.ScaleType.Slice
 blur.SliceCenter = Rect.new(16,16,48,48)
 
--- Title bar
 local titleBar = Instance.new("Frame", main)
 titleBar.Size = UDim2.new(1,0,0,30)
 titleBar.BackgroundColor3 = Color3.fromRGB(30,30,35)
@@ -165,7 +216,7 @@ local title = Instance.new("TextLabel", titleBar)
 title.Size = UDim2.new(1,-60,1,0)
 title.Position = UDim2.new(0,12,0,0)
 title.BackgroundTransparency = 1
-title.Text = "🧠 Brainrot Farmer"
+title.Text = "🏠 Base Farmer"
 title.TextColor3 = Color3.fromRGB(255,215,0)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 13
@@ -181,7 +232,9 @@ closeBtn.TextSize = 10
 closeBtn.BorderSizePixel = 0
 Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0,10)
 closeBtn.MouseButton1Click:Connect(function()
-    stopScanning()
+    if dashConn then dashConn:Disconnect() end
+    stopSpeedBypass()
+    if highlight then highlight:Destroy() end
     screenGui:Destroy()
 end)
 
@@ -251,50 +304,48 @@ toggleBtn.MouseButton1Click:Connect(function()
         Position = active and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)
     }):Play()
     if active then
-        startScanning()
-        scanBrainrots()  -- immediate first scan
+        scanBestPlot()
     else
-        stopScanning()
+        if highlight then highlight:Destroy(); highlight = nil end
     end
 end)
 
--- Teleport button
-local tpBtn = Instance.new("TextButton", content)
-tpBtn.Size = UDim2.new(1,-16,0,30)
-tpBtn.Position = UDim2.new(0,8,0,55)
-tpBtn.BackgroundColor3 = Color3.fromRGB(255,215,0)
-tpBtn.Text = "⚡ TELEPORT TO BEST"
-tpBtn.TextColor3 = Color3.new(0.1,0.1,0.1)
-tpBtn.Font = Enum.Font.GothamBold
-tpBtn.TextSize = 12
-tpBtn.BorderSizePixel = 0
-Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0,6)
-tpBtn.MouseButton1Click:Connect(teleportToBest)
+-- Dash button
+local dashBtn = Instance.new("TextButton", content)
+dashBtn.Size = UDim2.new(1,-16,0,30)
+dashBtn.Position = UDim2.new(0,8,0,55)
+dashBtn.BackgroundColor3 = Color3.fromRGB(255,215,0)
+dashBtn.Text = "⚡ DASH TO BEST BASE"
+dashBtn.TextColor3 = Color3.new(0.1,0.1,0.1)
+dashBtn.Font = Enum.Font.GothamBold
+dashBtn.TextSize = 12
+dashBtn.BorderSizePixel = 0
+Instance.new("UICorner", dashBtn).CornerRadius = UDim.new(0,6)
+dashBtn.MouseButton1Click:Connect(dashToBestBase)
 
--- Price label
-local priceLabel = Instance.new("TextLabel", content)
-priceLabel.Size = UDim2.new(1,-16,0,16)
-priceLabel.Position = UDim2.new(0,8,0,92)
-priceLabel.BackgroundTransparency = 1
-priceLabel.Text = "Best: N/A"
-priceLabel.TextColor3 = Color3.fromRGB(255,215,0)
-priceLabel.Font = Enum.Font.Gotham
-priceLabel.TextSize = 11
+-- Info label
+local infoLabel = Instance.new("TextLabel", content)
+infoLabel.Size = UDim2.new(1,-16,0,16)
+infoLabel.Position = UDim2.new(0,8,0,92)
+infoLabel.BackgroundTransparency = 1
+infoLabel.Text = "Best: N/A"
+infoLabel.TextColor3 = Color3.fromRGB(255,215,0)
+infoLabel.Font = Enum.Font.Gotham
+infoLabel.TextSize = 11
 
--- Update price label periodically
 RunService.Heartbeat:Connect(function()
-    if bestBrainrot then
-        local index = bestBrainrot:GetAttribute("Index")
-        priceLabel.Text = "Best: " .. (index or "???") .. " ($" .. tostring(bestPrice) .. ")"
+    if bestPlot then
+        local tier = bestPlot:GetAttribute("Tier") or 0
+        infoLabel.Text = "Best: Tier " .. tostring(tier)
     else
-        priceLabel.Text = "Best: N/A"
+        infoLabel.Text = "Best: N/A"
     end
 end)
 
 -- Entrance animation
-main.Size = UDim2.new(0,0,0,120)
+main.Size = UDim2.new(0,0,0,140)
 TweenService:Create(main, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-    Size = UDim2.new(0,240,0,120)
+    Size = UDim2.new(0,260,0,140)
 }):Play()
 
-print("[Brainrot Farmer] Ready – toggle Auto Scan, then teleport to the best brainrot!")
+print("[Base Farmer] Ready – toggle Auto Scan, then dash to the highest‑tier base!")
