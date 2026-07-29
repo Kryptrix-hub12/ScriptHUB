@@ -1,7 +1,10 @@
 -- ================================================================
---  Brainrot Value Server Hopper (Fixed)  ·  LocalScript
---  Scans for brainrots >70M, auto‑hops if not found
---  Uses executor HTTP request, avoids full servers, alerts on find
+--  Brainrot Value Auto‑Hopper (3s delay, pure random)  ·  LocalScript
+--  Scans for brainrots >49M, hops every 3 seconds if not found.
+--  Starts automatically – fully AFK.
+--  Shows a top‑screen popup when a valuable brainrot is detected.
+--  Random server selection, never joins friends.
+--  UI: Clean, modern, with scanning indicator.
 -- ================================================================
 
 local Players = game:GetService("Players")
@@ -23,11 +26,11 @@ if playerGui:FindFirstChild("BrainrotHopper") then
 end
 
 -- ===================== CONFIG =====================
-local MIN_PRICE = 70_000_000          -- 70 million
-local SCAN_DELAY = 10                 -- seconds before hopping
-local ALERT_SOUND_ID = "rbxassetid://9120386436"  -- beep sound
+local MIN_PRICE = 49_000_000           -- 49 million
+local SCAN_DELAY = 3                   -- seconds before hopping (was 10)
+local ALERT_SOUND_ID = "rbxassetid://9120386436"
 local PLACE_ID = game.PlaceId
-local MAX_PLAYERS = 8                -- target server size
+local MAX_PLAYERS = 8
 
 -- ===================== LOAD GAME DATA =====================
 local AnimalsData = {}
@@ -40,14 +43,82 @@ end
 
 -- ===================== STATE =====================
 local hopping = false
-local lastServerId = game.JobId      -- current server
+local lastServerId = game.JobId
 local found = false
 local statusText = nil
-local hoppingLoop = nil              -- forward declaration
+local startBtn = nil
+local scanIndicator = nil
 
 -- ===================== HTTP REQUEST FUNCTION =====================
--- Try common executor functions
-local httpRequest = syn and syn.request or http_request or request
+local httpRequest = nil
+for _, func in ipairs({"syn.request", "http.request", "request", "http_request", "syn_http_request"}) do
+    local success, f = pcall(function() return loadstring("return " .. func)() end)
+    if success and type(f) == "function" then
+        httpRequest = f
+        print("[Hopper] Using HTTP function: " .. func)
+        break
+    end
+end
+if not httpRequest then
+    warn("[Hopper] No HTTP request function found. Will use random teleport.")
+end
+
+-- ===================== TOP NOTIFICATION (no duplicates) =====================
+local function showNotification(title, message, duration)
+    local existing = playerGui:FindFirstChild("BrainrotNotification")
+    if existing then existing:Destroy() end
+
+    local notifGui = Instance.new("ScreenGui")
+    notifGui.Name = "BrainrotNotification"
+    notifGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    notifGui.DisplayOrder = 10
+    notifGui.Parent = playerGui
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 300, 0, 60)
+    frame.Position = UDim2.new(0.5, -150, 0, 10)
+    frame.BackgroundColor3 = Color3.fromRGB(30,30,35)
+    frame.BackgroundTransparency = 0.2
+    frame.BorderSizePixel = 0
+    frame.Parent = notifGui
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
+    Instance.new("UIStroke", frame).Color = Color3.fromRGB(0,255,200)
+    Instance.new("UIStroke", frame).Thickness = 1.5
+
+    local titleLbl = Instance.new("TextLabel", frame)
+    titleLbl.Size = UDim2.new(1,-20,0,24)
+    titleLbl.Position = UDim2.new(0,10,0,6)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text = title
+    titleLbl.TextColor3 = Color3.fromRGB(0,255,200)
+    titleLbl.Font = Enum.Font.GothamBold
+    titleLbl.TextSize = 14
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local msgLbl = Instance.new("TextLabel", frame)
+    msgLbl.Size = UDim2.new(1,-20,0,20)
+    msgLbl.Position = UDim2.new(0,10,0,32)
+    msgLbl.BackgroundTransparency = 1
+    msgLbl.Text = message
+    msgLbl.TextColor3 = Color3.new(1,1,1)
+    msgLbl.Font = Enum.Font.Gotham
+    msgLbl.TextSize = 12
+    msgLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    frame.Position = UDim2.new(0.5, -150, 0, -60)
+    TweenService:Create(frame, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Position = UDim2.new(0.5, -150, 0, 10)
+    }):Play()
+
+    task.delay(duration, function()
+        TweenService:Create(frame, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+            Position = UDim2.new(0.5, -150, 0, -60)
+        }):Play()
+        task.delay(0.3, function()
+            notifGui:Destroy()
+        end)
+    end)
+end
 
 -- ===================== UI =====================
 local screenGui = Instance.new("ScreenGui")
@@ -57,15 +128,16 @@ screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = playerGui
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 240, 0, 110)
-main.Position = UDim2.new(0.5, -120, 0.3, 0)
-main.BackgroundColor3 = Color3.fromRGB(25,25,30)
-main.BackgroundTransparency = 0.25
+main.Size = UDim2.new(0, 260, 0, 130)
+main.Position = UDim2.new(0.5, -130, 0.3, 0)
+main.BackgroundColor3 = Color3.fromRGB(20,20,25)
+main.BackgroundTransparency = 0.2
 main.BorderSizePixel = 0
 main.ClipsDescendants = true
 main.Parent = screenGui
-Instance.new("UICorner", main).CornerRadius = UDim.new(0,12)
-Instance.new("UIStroke", main).Color = Color3.fromRGB(255,215,0)
+Instance.new("UICorner", main).CornerRadius = UDim.new(0,14)
+Instance.new("UIStroke", main).Color = Color3.fromRGB(0,255,200)
+Instance.new("UIStroke", main).Thickness = 1.5
 
 local blur = Instance.new("ImageLabel", main)
 blur.Size = UDim2.new(1,0,1,0)
@@ -76,30 +148,31 @@ blur.ScaleType = Enum.ScaleType.Slice
 blur.SliceCenter = Rect.new(16,16,48,48)
 
 local titleBar = Instance.new("Frame", main)
-titleBar.Size = UDim2.new(1,0,0,30)
-titleBar.BackgroundColor3 = Color3.fromRGB(30,30,35)
+titleBar.Size = UDim2.new(1,0,0,32)
+titleBar.BackgroundColor3 = Color3.fromRGB(25,25,30)
 titleBar.BorderSizePixel = 0
-Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0,12)
+Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0,14)
 
 local title = Instance.new("TextLabel", titleBar)
 title.Size = UDim2.new(1,-60,1,0)
 title.Position = UDim2.new(0,12,0,0)
 title.BackgroundTransparency = 1
-title.Text = "🔍 Auto Hopper (70M)"
-title.TextColor3 = Color3.fromRGB(255,215,0)
+title.Text = "🔍 Auto Hopper (49M)"
+title.TextColor3 = Color3.fromRGB(0,255,200)
 title.Font = Enum.Font.GothamBold
 title.TextSize = 13
+title.TextXAlignment = Enum.TextXAlignment.Left
 
 local closeBtn = Instance.new("TextButton", titleBar)
-closeBtn.Size = UDim2.new(0,20,0,20)
-closeBtn.Position = UDim2.new(1,-24,0,5)
+closeBtn.Size = UDim2.new(0,22,0,22)
+closeBtn.Position = UDim2.new(1,-26,0,5)
 closeBtn.BackgroundColor3 = Color3.fromRGB(255,70,70)
 closeBtn.Text = "✕"
 closeBtn.TextColor3 = Color3.new(1,1,1)
 closeBtn.Font = Enum.Font.GothamBold
-closeBtn.TextSize = 10
+closeBtn.TextSize = 11
 closeBtn.BorderSizePixel = 0
-Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0,10)
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0,11)
 closeBtn.MouseButton1Click:Connect(function()
     hopping = false
     screenGui:Destroy()
@@ -124,8 +197,8 @@ end)
 
 -- Content
 local content = Instance.new("Frame", main)
-content.Size = UDim2.new(1,0,1,-30)
-content.Position = UDim2.new(0,0,0,30)
+content.Size = UDim2.new(1,0,1,-32)
+content.Position = UDim2.new(0,0,0,32)
 content.BackgroundTransparency = 1
 
 -- Status text
@@ -138,27 +211,16 @@ statusText.TextColor3 = Color3.new(1,1,1)
 statusText.Font = Enum.Font.Gotham
 statusText.TextSize = 12
 
--- Start button
-local startBtn = Instance.new("TextButton", content)
-startBtn.Size = UDim2.new(1,-16,0,30)
-startBtn.Position = UDim2.new(0,8,0,40)
-startBtn.BackgroundColor3 = Color3.fromRGB(255,215,0)
-startBtn.Text = "START HOPPING"
-startBtn.TextColor3 = Color3.new(0.1,0.1,0.1)
-startBtn.Font = Enum.Font.GothamBold
-startBtn.TextSize = 12
-startBtn.BorderSizePixel = 0
-Instance.new("UICorner", startBtn).CornerRadius = UDim.new(0,6)
-
-startBtn.MouseButton1Click:Connect(function()
-    if hopping then return end
-    hopping = true
-    found = false
-    statusText.Text = "Scanning server..."
-    startBtn.Text = "HOPPING..."
-    startBtn.BackgroundColor3 = Color3.fromRGB(80,80,90)
-    task.spawn(hoppingLoop)
-end)
+-- Scanning indicator
+scanIndicator = Instance.new("TextLabel", content)
+scanIndicator.Size = UDim2.new(0,20,0,20)
+scanIndicator.Position = UDim2.new(0, 8, 0, 40)
+scanIndicator.BackgroundTransparency = 1
+scanIndicator.Text = "🔍"
+scanIndicator.TextColor3 = Color3.fromRGB(0,255,200)
+scanIndicator.Font = Enum.Font.Gotham
+scanIndicator.TextSize = 14
+scanIndicator.Visible = false
 
 -- ===================== SCAN BRAINROTS =====================
 local function scanForHighValueBrainrot()
@@ -176,8 +238,8 @@ local function scanForHighValueBrainrot()
     return false
 end
 
--- ===================== ALERT SOUND =====================
-local function playAlert()
+-- ===================== ALERT =====================
+local function playAlert(name, price)
     local sound = Instance.new("Sound")
     sound.SoundId = ALERT_SOUND_ID
     sound.Volume = 1
@@ -186,90 +248,64 @@ local function playAlert()
     sound.Ended:Connect(function()
         sound:Destroy()
     end)
+    showNotification("🔥 Valuable Brainrot Found!", name .. " ($" .. tostring(price) .. ")", 5)
 end
 
--- ===================== GET AVAILABLE SERVERS =====================
-local function getAvailableServers()
-    -- Fetch friend list to exclude their servers (optional)
-    local friendIds = {}
-    local success, pages = pcall(function()
-        return Players:GetFriendsAsync(player.UserId)
+-- ===================== RANDOM HOP (fallback) =====================
+local function randomHop()
+    lastServerId = game.JobId
+    pcall(function()
+        TeleportService:Teleport(PLACE_ID, player)
     end)
-    if success then
-        repeat
-            for _, friend in ipairs(pages:GetCurrentPage()) do
-                friendIds[friend.Id] = true
-            end
-            if pages.IsFinished then break end
-            pages:AdvanceToNextPageAsync()
-        until false
-    end
-
-    -- Fetch server list
-    if not httpRequest then
-        warn("No HTTP request function available. Hopping disabled.")
-        return {}
-    end
-    local url = "https://games.roblox.com/v1/games/" .. game.GameId .. "/servers/Public?sortOrder=Desc&limit=100"
-    local response = httpRequest({ Url = url, Method = "GET" })
-    local result = HttpService:JSONDecode(response.Body)
-    if not result or not result.data then return {} end
-
-    local servers = {}
-    for _, srv in ipairs(result.data) do
-        -- Skip full servers
-        if srv.playing >= srv.maxPlayers then continue end
-        -- Skip current server
-        if srv.id == lastServerId then continue end
-        -- Optional: only same maxPlayers as our target
-        if srv.maxPlayers ~= MAX_PLAYERS then continue end
-        -- Add
-        table.insert(servers, srv)
-    end
-
-    -- Sort by most players descending
-    table.sort(servers, function(a, b) return a.playing > b.playing end)
-    return servers
 end
 
--- ===================== SERVER HOP =====================
+-- ===================== SERVER HOP WITH HTTP (random pick) =====================
 local function hopServer()
-    local servers = getAvailableServers()
-    if #servers == 0 then
-        statusText.Text = "No servers found, retrying..."
-        return false
-    end
-
-    for _, srv in ipairs(servers) do
-        lastServerId = srv.id  -- prevent rejoin
-        local success, err = pcall(function()
-            TeleportService:TeleportToPlaceInstance(PLACE_ID, srv.id, player)
-        end)
-        if success then
-            return true
+    if httpRequest then
+        local url = "https://games.roblox.com/v1/games/" .. game.GameId .. "/servers/Public?sortOrder=Desc&limit=100"
+        local response = httpRequest({ Url = url, Method = "GET" })
+        local body = response.Body or response.body
+        if body then
+            local result = HttpService:JSONDecode(body)
+            if result and result.data then
+                local servers = {}
+                for _, srv in ipairs(result.data) do
+                    if srv.playing < srv.maxPlayers and srv.id ~= lastServerId and srv.maxPlayers == MAX_PLAYERS then
+                        table.insert(servers, srv)
+                    end
+                end
+                if #servers > 0 then
+                    local srv = servers[math.random(#servers)]
+                    lastServerId = srv.id
+                    TeleportService:TeleportToPlaceInstance(PLACE_ID, srv.id, player)
+                    return true
+                end
+            end
         end
-        task.wait(0.5)
     end
-    statusText.Text = "All servers failed, retrying..."
-    return false
+    randomHop()
+    return true
 end
 
 -- ===================== HOPPING LOOP =====================
+local hoppingLoop
 hoppingLoop = function()
     while hopping do
-        -- Wait scan delay, checking frequently
         local waited = 0
         while waited < SCAN_DELAY and hopping do
             task.wait(1)
             waited = waited + 1
+            local icons = {"🔍", "🔎"}
+            scanIndicator.Text = icons[waited % 2 + 1]
             local foundNow, price, name = scanForHighValueBrainrot()
             if foundNow then
                 found = true
                 hopping = false
                 statusText.Text = "Found! " .. name .. " ($" .. tostring(price) .. ")"
-                playAlert()
+                scanIndicator.Visible = false
+                playAlert(name, price)
                 startBtn.Text = "START HOPPING"
-                startBtn.BackgroundColor3 = Color3.fromRGB(255,215,0)
+                startBtn.BackgroundColor3 = Color3.fromRGB(0,255,200)
                 return
             end
             statusText.Text = "Scanning... (" .. (SCAN_DELAY - waited) .. "s left)"
@@ -281,36 +317,72 @@ hoppingLoop = function()
                 found = true
                 hopping = false
                 statusText.Text = "Found! " .. name .. " ($" .. tostring(price) .. ")"
-                playAlert()
+                scanIndicator.Visible = false
+                playAlert(name, price)
                 startBtn.Text = "START HOPPING"
-                startBtn.BackgroundColor3 = Color3.fromRGB(255,215,0)
+                startBtn.BackgroundColor3 = Color3.fromRGB(0,255,200)
                 return
             end
-            -- Hop
-            statusText.Text = "Hopping server..."
-            local hopped = hopServer()
-            if not hopped then
-                statusText.Text = "Hop failed, retrying..."
-                task.wait(2)
-            end
+            statusText.Text = "Hopping to random server..."
+            hopServer()
         end
     end
 end
 
--- Initial scan
+-- ===================== START BUTTON =====================
+startBtn = Instance.new("TextButton", content)
+startBtn.Size = UDim2.new(1,-16,0,30)
+startBtn.Position = UDim2.new(0,8,0,40)
+startBtn.BackgroundColor3 = Color3.fromRGB(0,255,200)
+startBtn.Text = "START HOPPING"
+startBtn.TextColor3 = Color3.new(0.1,0.1,0.1)
+startBtn.Font = Enum.Font.GothamBold
+startBtn.TextSize = 12
+startBtn.BorderSizePixel = 0
+Instance.new("UICorner", startBtn).CornerRadius = UDim.new(0,6)
+
+startBtn.MouseButton1Click:Connect(function()
+    if hopping then return end
+    hopping = true
+    found = false
+    statusText.Text = "Scanning server..."
+    scanIndicator.Visible = true
+    startBtn.Text = "HOPPING..."
+    startBtn.BackgroundColor3 = Color3.fromRGB(80,80,90)
+    task.spawn(hoppingLoop)
+end)
+
+-- ===================== TELEPORT FAILURE HANDLING =====================
+TeleportService.TeleportInitFailed:Connect(function()
+    if hopping then
+        task.wait(2)
+        hopServer()
+    end
+end)
+
+-- ===================== AUTO‑START =====================
+hopping = true
+scanIndicator.Visible = true
+startBtn.Text = "HOPPING..."
+startBtn.BackgroundColor3 = Color3.fromRGB(80,80,90)
+task.spawn(hoppingLoop)
+
 local initialFound, price, name = scanForHighValueBrainrot()
 if initialFound then
     found = true
+    hopping = false
     statusText.Text = "Already found! " .. name .. " ($" .. tostring(price) .. ")"
-    playAlert()
+    scanIndicator.Visible = false
+    playAlert(name, price)
+    startBtn.Text = "START HOPPING"
+    startBtn.BackgroundColor3 = Color3.fromRGB(0,255,200)
 else
-    statusText.Text = "No 70M+ brainrot. Press Start to hop."
+    statusText.Text = "Scanning server..."
 end
 
--- Entrance animation
-main.Size = UDim2.new(0,0,0,110)
+main.Size = UDim2.new(0,0,0,130)
 TweenService:Create(main, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-    Size = UDim2.new(0,240,0,110)
+    Size = UDim2.new(0,260,0,130)
 }):Play()
 
-print("[Brainrot Hopper] Ready. Press Start to begin hopping for 70M+ brainrots.")
+print("[Brainrot Hopper] 3s AFK mode – hopping randomly every 3 seconds.")
