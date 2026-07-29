@@ -1,0 +1,309 @@
+-- ================================================================
+--  Brainrot Value Server Hopper  ·  LocalScript
+--  Scans server for brainrots >70M, auto‑hops if not found
+--  Skips full servers, avoids last server, plays alert on find
+--  UI: Simple movable frame, Start/Stop
+-- ================================================================
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
+local CollectionService = game:GetService("CollectionService")
+local SoundService = game:GetService("SoundService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Clean old
+if playerGui:FindFirstChild("BrainrotHopper") then
+    playerGui.BrainrotHopper:Destroy()
+end
+
+-- ===================== CONFIG =====================
+local MIN_PRICE = 70_000_000       -- 70 million
+local SCAN_DELAY = 10              -- seconds before hopping
+local ALERT_SOUND_ID = "rbxassetid://9120386436"  -- a beep sound (change if needed)
+local PLACE_ID = game.PlaceId
+local MAX_PLAYERS = 8             -- server size as you mentioned
+
+-- ===================== LOAD GAME DATA =====================
+local AnimalsData = {}
+pcall(function()
+    AnimalsData = require(ReplicatedStorage.Datas.Animals)
+end)
+if not next(AnimalsData) then
+    warn("Could not load Datas.Animals – prices won't be available")
+end
+
+-- ===================== STATE =====================
+local hopping = false
+local lastServerId = game.JobId      -- current server
+local scanTimer = 0
+local found = false
+local statusText = nil
+
+-- ===================== UI =====================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "BrainrotHopper"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = playerGui
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 240, 0, 110)
+main.Position = UDim2.new(0.5, -120, 0.3, 0)
+main.BackgroundColor3 = Color3.fromRGB(25,25,30)
+main.BackgroundTransparency = 0.25
+main.BorderSizePixel = 0
+main.ClipsDescendants = true
+main.Parent = screenGui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0,12)
+Instance.new("UIStroke", main).Color = Color3.fromRGB(255,215,0)
+
+local blur = Instance.new("ImageLabel", main)
+blur.Size = UDim2.new(1,0,1,0)
+blur.BackgroundTransparency = 1
+blur.Image = "rbxassetid://9968344105"
+blur.ImageTransparency = 0.8
+blur.ScaleType = Enum.ScaleType.Slice
+blur.SliceCenter = Rect.new(16,16,48,48)
+
+local titleBar = Instance.new("Frame", main)
+titleBar.Size = UDim2.new(1,0,0,30)
+titleBar.BackgroundColor3 = Color3.fromRGB(30,30,35)
+titleBar.BorderSizePixel = 0
+Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0,12)
+
+local title = Instance.new("TextLabel", titleBar)
+title.Size = UDim2.new(1,-60,1,0)
+title.Position = UDim2.new(0,12,0,0)
+title.BackgroundTransparency = 1
+title.Text = "🔍 Auto Hopper (70M)"
+title.TextColor3 = Color3.fromRGB(255,215,0)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 13
+
+local closeBtn = Instance.new("TextButton", titleBar)
+closeBtn.Size = UDim2.new(0,20,0,20)
+closeBtn.Position = UDim2.new(1,-24,0,5)
+closeBtn.BackgroundColor3 = Color3.fromRGB(255,70,70)
+closeBtn.Text = "✕"
+closeBtn.TextColor3 = Color3.new(1,1,1)
+closeBtn.Font = Enum.Font.GothamBold
+closeBtn.TextSize = 10
+closeBtn.BorderSizePixel = 0
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0,10)
+closeBtn.MouseButton1Click:Connect(function()
+    hopping = false
+    screenGui:Destroy()
+end)
+
+-- Dragging
+local dragStart, dragPos, dragging
+titleBar.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true; dragStart = input.Position; dragPos = main.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        main.Position = UDim2.new(dragPos.X.Scale, dragPos.X.Offset + delta.X, dragPos.Y.Scale, dragPos.Y.Offset + delta.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+end)
+
+-- Content
+local content = Instance.new("Frame", main)
+content.Size = UDim2.new(1,0,1,-30)
+content.Position = UDim2.new(0,0,0,30)
+content.BackgroundTransparency = 1
+
+-- Status text
+statusText = Instance.new("TextLabel", content)
+statusText.Size = UDim2.new(1,-16,0,20)
+statusText.Position = UDim2.new(0,8,0,10)
+statusText.BackgroundTransparency = 1
+statusText.Text = "Ready"
+statusText.TextColor3 = Color3.new(1,1,1)
+statusText.Font = Enum.Font.Gotham
+statusText.TextSize = 12
+
+-- Start button
+local startBtn = Instance.new("TextButton", content)
+startBtn.Size = UDim2.new(1,-16,0,30)
+startBtn.Position = UDim2.new(0,8,0,40)
+startBtn.BackgroundColor3 = Color3.fromRGB(255,215,0)
+startBtn.Text = "START HOPPING"
+startBtn.TextColor3 = Color3.new(0.1,0.1,0.1)
+startBtn.Font = Enum.Font.GothamBold
+startBtn.TextSize = 12
+startBtn.BorderSizePixel = 0
+Instance.new("UICorner", startBtn).CornerRadius = UDim.new(0,6)
+
+startBtn.MouseButton1Click:Connect(function()
+    if hopping then return end
+    hopping = true
+    found = false
+    scanTimer = 0
+    statusText.Text = "Scanning server..."
+    startBtn.Text = "HOPPING..."
+    startBtn.BackgroundColor3 = Color3.fromRGB(80,80,90)
+    -- Resume hopping loop
+    task.spawn(hoppingLoop)
+end)
+
+-- ===================== SCAN BRAINROTS =====================
+local function scanForHighValueBrainrot()
+    local animals = CollectionService:GetTagged("Animal")
+    for _, model in ipairs(animals) do
+        local index = model:GetAttribute("Index")
+        if index and AnimalsData[index] then
+            local price = AnimalsData[index].Price or 0
+            if price > MIN_PRICE then
+                return true, price, index
+            end
+        end
+    end
+    return false
+end
+
+-- ===================== ALERT SOUND =====================
+local function playAlert()
+    local sound = Instance.new("Sound")
+    sound.SoundId = ALERT_SOUND_ID
+    sound.Volume = 1
+    sound.Parent = SoundService
+    sound:Play()
+    task.delay(2, function() sound:Destroy() end)
+end
+
+-- ===================== SERVER HOPPING =====================
+local function getAvailableServers()
+    -- Fetch friend list to later exclude their servers (limited)
+    local friendIds = {}
+    pcall(function()
+        local success, friends = pcall(Players.GetFriendsAsync, player, 200)
+        if success then
+            for _, friend in ipairs(friends) do
+                friendIds[friend.Id] = true
+            end
+        end
+    end)
+
+    -- Fetch server list
+    local url = "https://games.roblox.com/v1/games/" .. game.GameId .. "/servers/Public?sortOrder=Desc&limit=100"
+    local success, result = pcall(function()
+        return HttpService:JSONDecode(HttpService:GetAsync(url))
+    end)
+    if not success or not result or not result.data then return {} end
+
+    local servers = {}
+    for _, srv in ipairs(result.data) do
+        -- Skip full servers (playing >= max players)
+        if srv.playing >= srv.maxPlayers then continue end
+        -- Skip current server (lastServerId)
+        if srv.id == lastServerId then continue end
+        -- Skip servers with 0 players? (they said no bacon avatars, but we can't really check; skip 0 to be safe)
+        if srv.playing < 1 then continue end
+        -- Skip servers that contain friends (impossible without player list, so ignore)
+        -- Add to list
+        table.insert(servers, srv)
+    end
+
+    -- Sort by descending player count (to join the most active server)
+    table.sort(servers, function(a, b) return a.playing > b.playing end)
+    return servers
+end
+
+local function hopServer()
+    local servers = getAvailableServers()
+    if #servers == 0 then
+        statusText.Text = "No servers found, retrying..."
+        return false
+    end
+
+    -- Try each server until one succeeds
+    for _, srv in ipairs(servers) do
+        local success, err = pcall(function()
+            TeleportService:TeleportToPlaceInstance(PLACE_ID, srv.id, player)
+        end)
+        if success then
+            -- Teleport initiates; the game will reload. We won't reach here after successful teleport.
+            -- But if it fails, we continue to next server.
+            return true
+        end
+        task.wait(0.5)  -- small delay between attempts
+    end
+    statusText.Text = "All servers failed, retrying..."
+    return false
+end
+
+-- ===================== HOPPING LOOP =====================
+function hoppingLoop()
+    while hopping do
+        -- Wait SCAN_DELAY seconds, checking for brainrots
+        local waited = 0
+        while waited < SCAN_DELAY and hopping do
+            task.wait(1)
+            waited = waited + 1
+            -- Early scan: if we find a high-value brainrot, stop immediately
+            local foundNow, price, name = scanForHighValueBrainrot()
+            if foundNow then
+                found = true
+                hopping = false
+                statusText.Text = "Found! " .. name .. " ($" .. tostring(price) .. ")"
+                playAlert()
+                startBtn.Text = "START HOPPING"
+                startBtn.BackgroundColor3 = Color3.fromRGB(255,215,0)
+                return
+            end
+            statusText.Text = "Scanning... (" .. (SCAN_DELAY - waited) .. "s left)"
+        end
+
+        -- If still hopping after delay, scan one final time
+        if hopping then
+            local foundNow, price, name = scanForHighValueBrainrot()
+            if foundNow then
+                found = true
+                hopping = false
+                statusText.Text = "Found! " .. name .. " ($" .. tostring(price) .. ")"
+                playAlert()
+                startBtn.Text = "START HOPPING"
+                startBtn.BackgroundColor3 = Color3.fromRGB(255,215,0)
+                return
+            end
+            -- Hop to a new server
+            statusText.Text = "Hopping server..."
+            local hopped = hopServer()
+            if not hopped then
+                statusText.Text = "Hop failed, retrying..."
+                task.wait(2)
+            end
+        end
+    end
+end
+
+-- Initial check when script first runs
+local initialFound, price, name = scanForHighValueBrainrot()
+if initialFound then
+    found = true
+    statusText.Text = "Already found! " .. name .. " ($" .. tostring(price) .. ")"
+    playAlert()
+else
+    statusText.Text = "No 70M+ brainrot. Press Start to hop."
+end
+
+-- Entrance animation
+main.Size = UDim2.new(0,0,0,110)
+TweenService:Create(main, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+    Size = UDim2.new(0,240,0,110)
+}):Play()
+
+print("[Brainrot Hopper] Ready. Press Start to begin hopping for 70M+ brainrots.")
