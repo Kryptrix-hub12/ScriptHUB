@@ -1,8 +1,7 @@
 -- ================================================================
---  Brainrot Value Server Hopper  ·  LocalScript
---  Scans server for brainrots >70M, auto‑hops if not found
---  Skips full servers, avoids last server, plays alert on find
---  UI: Simple movable frame, Start/Stop
+--  Brainrot Value Server Hopper (Fixed)  ·  LocalScript
+--  Scans for brainrots >70M, auto‑hops if not found
+--  Uses executor HTTP request, avoids full servers, alerts on find
 -- ================================================================
 
 local Players = game:GetService("Players")
@@ -24,11 +23,11 @@ if playerGui:FindFirstChild("BrainrotHopper") then
 end
 
 -- ===================== CONFIG =====================
-local MIN_PRICE = 70_000_000       -- 70 million
-local SCAN_DELAY = 10              -- seconds before hopping
-local ALERT_SOUND_ID = "rbxassetid://9120386436"  -- a beep sound (change if needed)
+local MIN_PRICE = 70_000_000          -- 70 million
+local SCAN_DELAY = 10                 -- seconds before hopping
+local ALERT_SOUND_ID = "rbxassetid://9120386436"  -- beep sound
 local PLACE_ID = game.PlaceId
-local MAX_PLAYERS = 8             -- server size as you mentioned
+local MAX_PLAYERS = 8                -- target server size
 
 -- ===================== LOAD GAME DATA =====================
 local AnimalsData = {}
@@ -42,9 +41,13 @@ end
 -- ===================== STATE =====================
 local hopping = false
 local lastServerId = game.JobId      -- current server
-local scanTimer = 0
 local found = false
 local statusText = nil
+local hoppingLoop = nil              -- forward declaration
+
+-- ===================== HTTP REQUEST FUNCTION =====================
+-- Try common executor functions
+local httpRequest = syn and syn.request or http_request or request
 
 -- ===================== UI =====================
 local screenGui = Instance.new("ScreenGui")
@@ -151,11 +154,9 @@ startBtn.MouseButton1Click:Connect(function()
     if hopping then return end
     hopping = true
     found = false
-    scanTimer = 0
     statusText.Text = "Scanning server..."
     startBtn.Text = "HOPPING..."
     startBtn.BackgroundColor3 = Color3.fromRGB(80,80,90)
-    -- Resume hopping loop
     task.spawn(hoppingLoop)
 end)
 
@@ -164,10 +165,11 @@ local function scanForHighValueBrainrot()
     local animals = CollectionService:GetTagged("Animal")
     for _, model in ipairs(animals) do
         local index = model:GetAttribute("Index")
-        if index and AnimalsData[index] then
-            local price = AnimalsData[index].Price or 0
-            if price > MIN_PRICE then
-                return true, price, index
+        if index then
+            local animal = AnimalsData[index]
+            if animal and animal.Price and animal.Price > MIN_PRICE then
+                local name = animal.DisplayName or index
+                return true, animal.Price, name
             end
         end
     end
@@ -181,47 +183,56 @@ local function playAlert()
     sound.Volume = 1
     sound.Parent = SoundService
     sound:Play()
-    task.delay(2, function() sound:Destroy() end)
+    sound.Ended:Connect(function()
+        sound:Destroy()
+    end)
 end
 
--- ===================== SERVER HOPPING =====================
+-- ===================== GET AVAILABLE SERVERS =====================
 local function getAvailableServers()
-    -- Fetch friend list to later exclude their servers (limited)
+    -- Fetch friend list to exclude their servers (optional)
     local friendIds = {}
-    pcall(function()
-        local success, friends = pcall(Players.GetFriendsAsync, player, 200)
-        if success then
-            for _, friend in ipairs(friends) do
+    local success, pages = pcall(function()
+        return Players:GetFriendsAsync(player.UserId)
+    end)
+    if success then
+        repeat
+            for _, friend in ipairs(pages:GetCurrentPage()) do
                 friendIds[friend.Id] = true
             end
-        end
-    end)
+            if pages.IsFinished then break end
+            pages:AdvanceToNextPageAsync()
+        until false
+    end
 
     -- Fetch server list
+    if not httpRequest then
+        warn("No HTTP request function available. Hopping disabled.")
+        return {}
+    end
     local url = "https://games.roblox.com/v1/games/" .. game.GameId .. "/servers/Public?sortOrder=Desc&limit=100"
-    local success, result = pcall(function()
-        return HttpService:JSONDecode(HttpService:GetAsync(url))
-    end)
-    if not success or not result or not result.data then return {} end
+    local response = httpRequest({ Url = url, Method = "GET" })
+    local result = HttpService:JSONDecode(response.Body)
+    if not result or not result.data then return {} end
 
     local servers = {}
     for _, srv in ipairs(result.data) do
-        -- Skip full servers (playing >= max players)
+        -- Skip full servers
         if srv.playing >= srv.maxPlayers then continue end
-        -- Skip current server (lastServerId)
+        -- Skip current server
         if srv.id == lastServerId then continue end
-        -- Skip servers with 0 players? (they said no bacon avatars, but we can't really check; skip 0 to be safe)
-        if srv.playing < 1 then continue end
-        -- Skip servers that contain friends (impossible without player list, so ignore)
-        -- Add to list
+        -- Optional: only same maxPlayers as our target
+        if srv.maxPlayers ~= MAX_PLAYERS then continue end
+        -- Add
         table.insert(servers, srv)
     end
 
-    -- Sort by descending player count (to join the most active server)
+    -- Sort by most players descending
     table.sort(servers, function(a, b) return a.playing > b.playing end)
     return servers
 end
 
+-- ===================== SERVER HOP =====================
 local function hopServer()
     local servers = getAvailableServers()
     if #servers == 0 then
@@ -229,31 +240,28 @@ local function hopServer()
         return false
     end
 
-    -- Try each server until one succeeds
     for _, srv in ipairs(servers) do
+        lastServerId = srv.id  -- prevent rejoin
         local success, err = pcall(function()
             TeleportService:TeleportToPlaceInstance(PLACE_ID, srv.id, player)
         end)
         if success then
-            -- Teleport initiates; the game will reload. We won't reach here after successful teleport.
-            -- But if it fails, we continue to next server.
             return true
         end
-        task.wait(0.5)  -- small delay between attempts
+        task.wait(0.5)
     end
     statusText.Text = "All servers failed, retrying..."
     return false
 end
 
 -- ===================== HOPPING LOOP =====================
-function hoppingLoop()
+hoppingLoop = function()
     while hopping do
-        -- Wait SCAN_DELAY seconds, checking for brainrots
+        -- Wait scan delay, checking frequently
         local waited = 0
         while waited < SCAN_DELAY and hopping do
             task.wait(1)
             waited = waited + 1
-            -- Early scan: if we find a high-value brainrot, stop immediately
             local foundNow, price, name = scanForHighValueBrainrot()
             if foundNow then
                 found = true
@@ -267,7 +275,6 @@ function hoppingLoop()
             statusText.Text = "Scanning... (" .. (SCAN_DELAY - waited) .. "s left)"
         end
 
-        -- If still hopping after delay, scan one final time
         if hopping then
             local foundNow, price, name = scanForHighValueBrainrot()
             if foundNow then
@@ -279,7 +286,7 @@ function hoppingLoop()
                 startBtn.BackgroundColor3 = Color3.fromRGB(255,215,0)
                 return
             end
-            -- Hop to a new server
+            -- Hop
             statusText.Text = "Hopping server..."
             local hopped = hopServer()
             if not hopped then
@@ -290,7 +297,7 @@ function hoppingLoop()
     end
 end
 
--- Initial check when script first runs
+-- Initial scan
 local initialFound, price, name = scanForHighValueBrainrot()
 if initialFound then
     found = true
