@@ -1,21 +1,81 @@
--- Anti‑Lag Mobility GUI (Speed 65, Infinite Jump, NoClip, Low Graphics)
--- Draggable, closable/reopen with N, all toggles persist across respawns.
+-- Advanced Anti‑Lag Mobility (Speed 65, Infinite Jump + Air Control, NoClip, Max Performance)
+-- Draggable GUI with close/reopen (N key), all toggles persist across respawns.
 
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
+local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
+
+-- ---------- Advanced Anti‑Lag Settings ----------
+local function applyPerformance(enable)
+	if enable then
+		-- Graphics quality: lowest possible (0 is lowest, but 1 is safe)
+		game:GetService("UserSettings"):GetService("UserGameSettings").GraphicsQualityLevel = 1
+		
+		-- Lighting: no shadows, minimal fog, fixed time
+		Lighting.GlobalShadows = false
+		Lighting.ClockTime = 12
+		Lighting.FogEnd = 100
+		Lighting.FogStart = 0
+		
+		-- Workspace: reduce render distance, disable smooth movement
+		Workspace.RenderDistance = 500  -- minimum is 500
+		Workspace.StreamingEnabled = true
+		
+		-- Disable particles, decals, and other visual effects
+		for _, v in ipairs(Workspace:GetDescendants()) do
+			if v:IsA("ParticleEmitter") then
+				v.Enabled = false
+			elseif v:IsA("Decal") or v:IsA("Texture") then
+				v.Transparency = 1
+			elseif v:IsA("Beam") then
+				v.Enabled = false
+			end
+		end
+		-- Disable water reflections (if any)
+		if Workspace.Terrain then
+			Workspace.Terrain.WaterReflectance = 0
+			Workspace.Terrain.WaterTransparency = 1
+		end
+		-- Reduce texture quality via ContentProvider
+		game:GetService("ContentProvider").TextureQuality = Enum.TextureQuality.QualityLevelLowest
+	else
+		-- Restore to moderate settings
+		game:GetService("UserSettings"):GetService("UserGameSettings").GraphicsQualityLevel = 3
+		Lighting.GlobalShadows = true
+		Lighting.ClockTime = 14
+		Lighting.FogEnd = 1000
+		Lighting.FogStart = 100
+		Workspace.RenderDistance = 5000
+		Workspace.StreamingEnabled = false
+		game:GetService("ContentProvider").TextureQuality = Enum.TextureQuality.QualityLevelMedium
+		-- Re‑enable particles/decals (only on existing, not newly added; but that's fine)
+		for _, v in ipairs(Workspace:GetDescendants()) do
+			if v:IsA("ParticleEmitter") then
+				v.Enabled = true
+			elseif v:IsA("Decal") or v:IsA("Texture") then
+				v.Transparency = 0
+			elseif v:IsA("Beam") then
+				v.Enabled = true
+			end
+		end
+		if Workspace.Terrain then
+			Workspace.Terrain.WaterReflectance = 0.5
+			Workspace.Terrain.WaterTransparency = 0.7
+		end
+	end
+end
 
 -- ---------- GUI Creation ----------
 local gui = Instance.new("ScreenGui")
-gui.Name = "AntiLagGUI"
+gui.Name = "AdvancedAntiLagGUI"
 gui.ResetOnSpawn = false
 
--- Main Frame
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 300, 0, 280)
-frame.Position = UDim2.new(0.5, -150, 0.5, -140)
+frame.Size = UDim2.new(0, 320, 0, 310)
+frame.Position = UDim2.new(0.5, -160, 0.5, -155)
 frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
 frame.BackgroundTransparency = 0.15
 frame.BorderSizePixel = 0
@@ -33,7 +93,7 @@ shadow.ImageColor3 = Color3.new(0,0,0)
 shadow.ImageTransparency = 0.6
 shadow.Parent = frame
 
--- ---------- Title Bar (draggable) ----------
+-- Title Bar (draggable)
 local titleBar = Instance.new("Frame")
 titleBar.Size = UDim2.new(1, 0, 0, 38)
 titleBar.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
@@ -46,14 +106,13 @@ local titleLabel = Instance.new("TextLabel")
 titleLabel.Size = UDim2.new(1, -50, 1, 0)
 titleLabel.Position = UDim2.new(0, 12, 0, 0)
 titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "⚡ Anti‑Lag Controls"
+titleLabel.Text = "⚡ Advanced Mobility"
 titleLabel.TextColor3 = Color3.fromRGB(255,255,255)
 titleLabel.TextSize = 18
 titleLabel.Font = Enum.Font.GothamBold
 titleLabel.TextXAlignment = Enum.TextXAlignment.Left
 titleLabel.Parent = titleBar
 
--- Close Button
 local closeBtn = Instance.new("TextButton")
 closeBtn.Size = UDim2.new(0, 30, 0, 30)
 closeBtn.Position = UDim2.new(1, -36, 0, 4)
@@ -67,11 +126,11 @@ closeBtn.Font = Enum.Font.GothamBold
 Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(1, 0)
 closeBtn.Parent = titleBar
 
--- ---------- Toggle Buttons ----------
-local function createToggle(text, yPos, color)
+-- ---------- Toggle Buttons (two columns) ----------
+local function createToggle(text, x, y, color)
 	local btn = Instance.new("TextButton")
 	btn.Size = UDim2.new(0, 130, 0, 40)
-	btn.Position = UDim2.new(0.5, -145, 0, yPos)
+	btn.Position = UDim2.new(x, 0, 0, y)
 	btn.BackgroundColor3 = color
 	btn.BackgroundTransparency = 0.3
 	btn.BorderSizePixel = 0
@@ -84,12 +143,14 @@ local function createToggle(text, yPos, color)
 	return btn
 end
 
-local speedBtn   = createToggle("Speed 65", 50, Color3.fromRGB(70, 120, 200))
-local jumpBtn    = createToggle("Infinite Jump", 105, Color3.fromRGB(70, 120, 200))
-local noclipBtn  = createToggle("NoClip", 160, Color3.fromRGB(70, 120, 200))
-local perfBtn    = createToggle("Low Graphics", 215, Color3.fromRGB(200, 150, 50))
+local speedBtn   = createToggle("Speed 65", 0.1, 50, Color3.fromRGB(70, 120, 200))
+local jumpBtn    = createToggle("Infinite Jump", 0.55, 50, Color3.fromRGB(70, 120, 200))
+local noclipBtn  = createToggle("NoClip", 0.1, 110, Color3.fromRGB(70, 120, 200))
+local airJumpBtn = createToggle("Air Jump", 0.55, 110, Color3.fromRGB(150, 70, 200))  -- advanced feature
+local perfBtn    = createToggle("Ultra Anti‑Lag", 0.1, 170, Color3.fromRGB(200, 150, 50))
 
--- Adjust second column? We'll keep them stacked for simplicity.
+-- Additional button for "Hold to Fly" (combined with jump)
+local flyBtn = createToggle("Hold Fly", 0.55, 170, Color3.fromRGB(200, 70, 150))
 
 -- ---------- GUI Visibility ----------
 local guiVisible = true
@@ -141,7 +202,9 @@ end)
 -- ---------- State ----------
 local state = {
 	speed = false,
-	jump = false,
+	jump = false,          -- infinite jump (hold space to jump repeatedly)
+	airJump = false,       -- can jump in mid-air (even without ground)
+	flyHold = false,       -- hold space to ascend (like fly up)
 	noclip = false,
 	perf = false,
 }
@@ -165,46 +228,24 @@ local function applyNoClip(character, enable)
 	end
 end
 
-local function applyPerformance(enable)
-	if enable then
-		-- Lowest graphics, shadows off, low textures
-		game:GetService("UserSettings"):GetService("UserGameSettings").GraphicsQualityLevel = 1
-		Lighting.GlobalShadows = false
-		Lighting.ClockTime = 12
-		Lighting.FogEnd = 500
-		Lighting.FogStart = 0
-	else
-		-- Reset to medium (adjust as needed)
-		game:GetService("UserSettings"):GetService("UserGameSettings").GraphicsQualityLevel = 3
-		Lighting.GlobalShadows = true
-		Lighting.ClockTime = 14
-		Lighting.FogEnd = 1000
-		Lighting.FogStart = 100
-	end
-end
-
--- Apply all settings to a character
+-- Apply all to a character
 local function applyAll(character)
 	if not character then return end
 	local humanoid = character:FindFirstChild("Humanoid")
 	if not humanoid then return end
-	-- Speed
 	updateSpeed(humanoid)
-	-- Watch for speed changes
 	humanoid:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
 		if state.speed and humanoid.WalkSpeed ~= 65 then
 			humanoid.WalkSpeed = 65
 		end
 	end)
-	-- NoClip
 	applyNoClip(character, state.noclip)
-	-- Infinite jump is handled in loop
-end
-
--- ---------- Character Respawn ----------
-local function onCharacterAdded(character)
-	character:WaitForChild("Humanoid")
-	applyAll(character)
+	-- Set jump power higher for better feeling
+	if state.jump or state.airJump then
+		humanoid.JumpPower = 70  -- slightly higher than default 50
+	else
+		humanoid.JumpPower = 50
+	end
 	-- Watch for new parts for noclip
 	character.DescendantAdded:Connect(function(desc)
 		if state.noclip and desc:IsA("BasePart") then
@@ -213,20 +254,69 @@ local function onCharacterAdded(character)
 	end)
 end
 
+-- ---------- Character Respawn ----------
+local function onCharacterAdded(character)
+	character:WaitForChild("Humanoid")
+	applyAll(character)
+end
+
 if player.Character then
 	onCharacterAdded(player.Character)
 end
 player.CharacterAdded:Connect(onCharacterAdded)
 
--- ---------- Main Loop (Infinite Jump) ----------
+-- ---------- Advanced Jump / Fly Logic ----------
+local jumpKeyDown = false
+UserInputService.InputBegan:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.Space then
+		jumpKeyDown = true
+	end
+end)
+UserInputService.InputEnded:Connect(function(input, gp)
+	if gp then return end
+	if input.KeyCode == Enum.KeyCode.Space then
+		jumpKeyDown = false
+	end
+end)
+
+-- Main loop for jump and fly
 RunService.Heartbeat:Connect(function()
-	if not state.jump then return end
 	local char = player.Character
 	if not char then return end
 	local humanoid = char:FindFirstChild("Humanoid")
 	if not humanoid then return end
-	if UserInputService:IsKeyDown(Enum.KeyCode.Space) and humanoid:GetState() == Enum.HumanoidStateType.Landed then
-		humanoid.Jump = true
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+
+	-- Infinite Jump (hold space to keep jumping, even if in air)
+	if state.jump and jumpKeyDown then
+		-- Standard: if on ground or air (with airJump enabled), jump
+		local canJump = (humanoid:GetState() == Enum.HumanoidStateType.Landed) or state.airJump
+		if canJump then
+			humanoid.Jump = true
+		end
+	end
+
+	-- Hold Fly: gives upward velocity when holding space, but only if the "Hold Fly" toggle is on
+	if state.flyHold and jumpKeyDown then
+		-- We want to keep the player floating upward, but not interfere with normal jump if toggled
+		-- Use a BodyVelocity or just set jump repeatedly? Better to apply velocity.
+		-- We'll use a BodyVelocity if not already present.
+		local bv = root:FindFirstChild("FlyBodyVelocity")
+		if not bv then
+			bv = Instance.new("BodyVelocity")
+			bv.Name = "FlyBodyVelocity"
+			bv.MaxForce = Vector3.new(0, 10000, 0)  -- only upward
+			bv.Velocity = Vector3.new(0, 50, 0)  -- upward speed
+			bv.Parent = root
+		end
+		-- Keep it alive; if space is held, the velocity stays.
+		-- If not held, we remove it.
+	else
+		-- Remove fly velocity if it exists
+		local bv = root:FindFirstChild("FlyBodyVelocity")
+		if bv then bv:Destroy() end
 	end
 end)
 
@@ -242,6 +332,46 @@ local function toggleJump()
 	state.jump = not state.jump
 	jumpBtn.Text = "Infinite Jump: " .. (state.jump and "ON" or "OFF")
 	jumpBtn.BackgroundColor3 = state.jump and Color3.fromRGB(70, 200, 70) or Color3.fromRGB(70, 120, 200)
+	-- update jump power
+	local hum = player.Character and player.Character:FindFirstChild("Humanoid")
+	if hum then
+		if state.jump or state.airJump then
+			hum.JumpPower = 70
+		else
+			hum.JumpPower = 50
+		end
+	end
+end
+
+local function toggleAirJump()
+	state.airJump = not state.airJump
+	airJumpBtn.Text = "Air Jump: " .. (state.airJump and "ON" or "OFF")
+	airJumpBtn.BackgroundColor3 = state.airJump and Color3.fromRGB(70, 200, 70) or Color3.fromRGB(150, 70, 200)
+	local hum = player.Character and player.Character:FindFirstChild("Humanoid")
+	if hum then
+		if state.jump or state.airJump then
+			hum.JumpPower = 70
+		else
+			hum.JumpPower = 50
+		end
+	end
+end
+
+local function toggleFlyHold()
+	state.flyHold = not state.flyHold
+	flyBtn.Text = "Hold Fly: " .. (state.flyHold and "ON" or "OFF")
+	flyBtn.BackgroundColor3 = state.flyHold and Color3.fromRGB(70, 200, 70) or Color3.fromRGB(200, 70, 150)
+	-- If turning off, remove any existing fly velocity
+	if not state.flyHold then
+		local char = player.Character
+		if char then
+			local root = char:FindFirstChild("HumanoidRootPart")
+			if root then
+				local bv = root:FindFirstChild("FlyBodyVelocity")
+				if bv then bv:Destroy() end
+			end
+		end
+	end
 end
 
 local function toggleNoclip()
@@ -253,13 +383,15 @@ end
 
 local function togglePerf()
 	state.perf = not state.perf
-	perfBtn.Text = "Low Graphics: " .. (state.perf and "ON" or "OFF")
+	perfBtn.Text = "Ultra Anti‑Lag: " .. (state.perf and "ON" or "OFF")
 	perfBtn.BackgroundColor3 = state.perf and Color3.fromRGB(70, 200, 70) or Color3.fromRGB(200, 150, 50)
 	applyPerformance(state.perf)
 end
 
 speedBtn.MouseButton1Click:Connect(toggleSpeed)
 jumpBtn.MouseButton1Click:Connect(toggleJump)
+airJumpBtn.MouseButton1Click:Connect(toggleAirJump)
+flyBtn.MouseButton1Click:Connect(toggleFlyHold)
 noclipBtn.MouseButton1Click:Connect(toggleNoclip)
 perfBtn.MouseButton1Click:Connect(togglePerf)
 
