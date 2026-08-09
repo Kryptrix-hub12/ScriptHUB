@@ -1,0 +1,608 @@
+-- ============================================================
+-- ECLIPSE DUELS // SAFE OWN-EXPERIENCE CLIENT
+-- One LocalScript for StarterPlayerScripts
+-- ============================================================
+-- This build keeps the Eclipse UI and visual tools, but it does not
+-- bypass Roblox security or automate another creator's experience.
+-- Gameplay actions are sent only to explicit hooks created in your own
+-- ReplicatedStorage/EclipseDuelsHooks folder and must be validated on the server.
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local player = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local playerGui = player:FindFirstChildOfClass("PlayerGui") or player:WaitForChild("PlayerGui", 12)
+local coreGui = game:GetService("CoreGui")
+local guiParent = playerGui or coreGui
+if not guiParent then
+    warn("[Eclipse Duels] Could not find PlayerGui; UI was not created")
+    return
+end
+
+local Config = {
+    Brand = "ECLIPSE DUELS",
+    Subtitle = "ROBLOX LUAU  //  W SCRIPT",
+    Discord = "discord.gg/b9jbqU3Yz  |  W script",
+    NormalSpeed = 120,
+    CarrySpeed = 59,
+    LaggerSpeed = 39,
+    LaggerCarrySpeed = 24.5,
+    AutoCarry = true,
+    AutoSteal = true,
+    InfiniteJump = false,
+    AntiRagdoll = true,
+    PlayerSpeedLabels = true,
+    PlayerNameTags = true,
+    Glow = true,
+    Particles = true,
+    UIScale = 1,
+    DropMode = "Jump",
+    StealMode = "Normal",
+    BackgroundImage = "rbxassetid://112002576136361",
+    ProfileImage = "rbxassetid://104937666038724",
+}
+
+local State = {
+    Carry = false, Lagger = false, LaggerCarry = false,
+    AutoLeft = false, AutoRight = false, AutoBat = false, BatV2 = false,
+    AutoTP = false, AutoSteal = Config.AutoSteal, AntiRagdoll = Config.AntiRagdoll,
+    InfiniteJump = Config.InfiniteJump, PlayerSpeedLabels = Config.PlayerSpeedLabels,
+    PlayerNameTags = Config.PlayerNameTags, UIHidden = false, UILocked = false,
+}
+
+local function getHook(name)
+    if type(name) ~= "string" or name:sub(1, 12) ~= "EclipseDuels" then return nil end
+    local folder = ReplicatedStorage:FindFirstChild("EclipseDuelsHooks")
+    local hook = folder and folder:FindFirstChild(name)
+    if hook and (hook:IsA("BindableEvent") or hook:IsA("BindableFunction") or hook:IsA("RemoteEvent") or hook:IsA("RemoteFunction")) then
+        return hook
+    end
+    return nil
+end
+
+local statusLabel
+local function status(text)
+    if statusLabel and statusLabel.Parent then statusLabel.Text = text end
+end
+
+local function callHook(name, ...)
+    local hook = getHook(name)
+    if not hook then status("HOOK MISSING") return false end
+    local args = {...}
+    local ok = pcall(function()
+        if hook:IsA("BindableEvent") then hook:Fire(player, table.unpack(args))
+        elseif hook:IsA("BindableFunction") then hook:Invoke(player, table.unpack(args))
+        elseif hook:IsA("RemoteEvent") then hook:FireServer(table.unpack(args))
+        else hook:InvokeServer(table.unpack(args)) end
+    end)
+    status(ok and "HOOK OK" or "HOOK ERROR")
+    return ok
+end
+
+-- ============================================================
+-- ECLIPSE BUTTON ACTION ZONES // EDIT HERE
+-- ============================================================
+-- Each ON/OFF button has its own pair of clearly marked functions.
+-- Put code for a button only between its START and END comments.
+-- These functions are shared by the main panel and mobile quick rail.
+
+local setAntiRagdollEnabled, refreshLabels, artwork
+local make, corner, stroke
+
+-- BUTTON: CARRY SPEED / CARRY MODE
+local function buttonCarryOn()
+    -- >>> CARRY SPEED ON: put your own-experience ON code here.
+    State.Carry = true; State.Lagger = false; State.LaggerCarry = false
+    callHook("EclipseDuelsCarrySpeed", Config.CarrySpeed, true)
+    -- <<< CARRY SPEED ON END
+end
+local function buttonCarryOff()
+    -- >>> CARRY SPEED OFF: put your own-experience OFF code here.
+    State.Carry = false
+    callHook("EclipseDuelsCarrySpeed", 0, false)
+    -- <<< CARRY SPEED OFF END
+end
+
+-- BUTTON: LAGGER MODE
+local function buttonLaggerOn()
+    -- >>> LAGGER MODE ON: put your own-experience ON code here.
+    State.Lagger = true; State.Carry = false; State.LaggerCarry = false
+    callHook("EclipseDuelsLagger", Config.LaggerSpeed, false)
+    -- <<< LAGGER MODE ON END
+end
+local function buttonLaggerOff()
+    -- >>> LAGGER MODE OFF: put your own-experience OFF code here.
+    State.Lagger = false
+    callHook("EclipseDuelsLagger", 0, false)
+    -- <<< LAGGER MODE OFF END
+end
+
+-- BUTTON: LAGGER CARRY MODE
+local function buttonLaggerCarryOn()
+    -- >>> LAGGER CARRY ON: put your own-experience ON code here.
+    State.LaggerCarry = true; State.Carry = false; State.Lagger = false
+    callHook("EclipseDuelsLagger", Config.LaggerCarrySpeed, true)
+    -- <<< LAGGER CARRY ON END
+end
+local function buttonLaggerCarryOff()
+    -- >>> LAGGER CARRY OFF: put your own-experience OFF code here.
+    State.LaggerCarry = false
+    callHook("EclipseDuelsLagger", 0, true)
+    -- <<< LAGGER CARRY OFF END
+end
+
+-- BUTTON: INFINITE JUMP
+local function buttonInfiniteJumpOn()
+    -- >>> INFINITE JUMP ON: put your own-experience ON code here.
+    State.InfiniteJump = true; callHook("EclipseDuelsInfiniteJump", true)
+    -- <<< INFINITE JUMP ON END
+end
+local function buttonInfiniteJumpOff()
+    -- >>> INFINITE JUMP OFF: put your own-experience OFF code here.
+    State.InfiniteJump = false; callHook("EclipseDuelsInfiniteJump", false)
+    -- <<< INFINITE JUMP OFF END
+end
+
+-- BUTTON: ANTI RAGDOLL
+local function buttonAntiRagdollOn()
+    -- >>> ANTI RAGDOLL ON: put your own-experience ON code here.
+    setAntiRagdollEnabled(true)
+    -- <<< ANTI RAGDOLL ON END
+end
+local function buttonAntiRagdollOff()
+    -- >>> ANTI RAGDOLL OFF: put your own-experience OFF code here.
+    setAntiRagdollEnabled(false)
+    -- <<< ANTI RAGDOLL OFF END
+end
+
+-- BUTTONS: UNWALK / MEDUSA COUNTER / BAT COUNTER
+local function buttonUnwalkOn() -- >>> UNWALK ON: add code here.
+    callHook("EclipseDuelsUnwalk", true) -- <<< UNWALK ON END
+end
+local function buttonUnwalkOff() -- >>> UNWALK OFF: add code here.
+    callHook("EclipseDuelsUnwalk", false) -- <<< UNWALK OFF END
+end
+local function buttonMedusaOn() -- >>> MEDUSA COUNTER ON: add code here.
+    callHook("EclipseDuelsMedusaCounter", true) -- <<< MEDUSA COUNTER ON END
+end
+local function buttonMedusaOff() -- >>> MEDUSA COUNTER OFF: add code here.
+    callHook("EclipseDuelsMedusaCounter", false) -- <<< MEDUSA COUNTER OFF END
+end
+local function buttonBatCounterOn() -- >>> BAT COUNTER ON: add code here.
+    callHook("EclipseDuelsBatCounter", true) -- <<< BAT COUNTER ON END
+end
+local function buttonBatCounterOff() -- >>> BAT COUNTER OFF: add code here.
+    callHook("EclipseDuelsBatCounter", false) -- <<< BAT COUNTER OFF END
+end
+
+-- BUTTONS: AUTO STEAL / AUTO LEFT / AUTO RIGHT / AUTO TP
+local function buttonAutoStealOn() -- >>> AUTO STEAL ON: add code here.
+    State.AutoSteal = true; callHook("EclipseDuelsAutoSteal", true, Config.StealMode) -- <<< AUTO STEAL ON END
+end
+local function buttonAutoStealOff() -- >>> AUTO STEAL OFF: add code here.
+    State.AutoSteal = false; callHook("EclipseDuelsAutoSteal", false, Config.StealMode) -- <<< AUTO STEAL OFF END
+end
+local function buttonAutoLeftOn() -- >>> AUTO LEFT ON: add code here.
+    State.AutoLeft = true; callHook("EclipseDuelsAutoLeft", true) -- <<< AUTO LEFT ON END
+end
+local function buttonAutoLeftOff() -- >>> AUTO LEFT OFF: add code here.
+    State.AutoLeft = false; callHook("EclipseDuelsAutoLeft", false) -- <<< AUTO LEFT OFF END
+end
+local function buttonAutoRightOn() -- >>> AUTO RIGHT ON: add code here.
+    State.AutoRight = true; callHook("EclipseDuelsAutoRight", true) -- <<< AUTO RIGHT ON END
+end
+local function buttonAutoRightOff() -- >>> AUTO RIGHT OFF: add code here.
+    State.AutoRight = false; callHook("EclipseDuelsAutoRight", false) -- <<< AUTO RIGHT OFF END
+end
+local function buttonAutoTPOn() -- >>> AUTO TP ON: add code here.
+    State.AutoTP = true; callHook("EclipseDuelsAutoTP", true) -- <<< AUTO TP ON END
+end
+local function buttonAutoTPOff() -- >>> AUTO TP OFF: add code here.
+    State.AutoTP = false; callHook("EclipseDuelsAutoTP", false) -- <<< AUTO TP OFF END
+end
+
+-- BUTTONS: AIMBOT / BAT V2 / BYPASS
+local function buttonAimbotOn() -- >>> AIMBOT ON: add code here.
+    State.AutoBat = true; callHook("EclipseDuelsAutoBat", true) -- <<< AIMBOT ON END
+end
+local function buttonAimbotOff() -- >>> AIMBOT OFF: add code here.
+    State.AutoBat = false; callHook("EclipseDuelsAutoBat", false) -- <<< AIMBOT OFF END
+end
+local function buttonBatV2On() -- >>> BAT V2 ON: add code here.
+    State.BatV2 = true; callHook("EclipseDuelsBatV2", true) -- <<< BAT V2 ON END
+end
+local function buttonBatV2Off() -- >>> BAT V2 OFF: add code here.
+    State.BatV2 = false; callHook("EclipseDuelsBatV2", false) -- <<< BAT V2 OFF END
+end
+local function buttonBypassOn() -- >>> BYPASS ON: add code here.
+    callHook("EclipseDuelsBypass", true) -- <<< BYPASS ON END
+end
+local function buttonBypassOff() -- >>> BYPASS OFF: add code here.
+    callHook("EclipseDuelsBypass", false) -- <<< BYPASS OFF END
+end
+
+-- BUTTON: PLAYER SPEED LABELS
+local function buttonSpeedLabelsOn() -- >>> SPEED LABELS ON: add code here.
+    State.PlayerSpeedLabels = true; refreshLabels() -- <<< SPEED LABELS ON END
+end
+local function buttonSpeedLabelsOff() -- >>> SPEED LABELS OFF: add code here.
+    State.PlayerSpeedLabels = false; refreshLabels() -- <<< SPEED LABELS OFF END
+end
+
+-- BUTTON: PLAYER NAME TAGS
+local function buttonNameTagsOn() -- >>> NAME TAGS ON: add code here.
+    State.PlayerNameTags = true; callHook("EclipseDuelsNameTags", true) -- <<< NAME TAGS ON END
+end
+local function buttonNameTagsOff() -- >>> NAME TAGS OFF: add code here.
+    State.PlayerNameTags = false; callHook("EclipseDuelsNameTags", false) -- <<< NAME TAGS OFF END
+end
+
+-- BUTTON: ECLIPSE GLOW / PARTICLE EFFECTS
+local function buttonGlowOn() -- >>> ECLIPSE GLOW ON: add code here.
+    Config.Glow = true; if artwork then artwork.ImageTransparency = 0.56 end; callHook("EclipseDuelsCleanVisuals", true) -- <<< ECLIPSE GLOW ON END
+end
+local function buttonGlowOff() -- >>> ECLIPSE GLOW OFF: add code here.
+    Config.Glow = false; if artwork then artwork.ImageTransparency = 0.85 end; callHook("EclipseDuelsCleanVisuals", false) -- <<< ECLIPSE GLOW OFF END
+end
+local function buttonParticlesOn() -- >>> PARTICLES ON: add code here.
+    Config.Particles = true; callHook("EclipseDuelsParticles", true) -- <<< PARTICLES ON END
+end
+local function buttonParticlesOff() -- >>> PARTICLES OFF: add code here.
+    Config.Particles = false; callHook("EclipseDuelsParticles", false) -- <<< PARTICLES OFF END
+end
+
+-- BUTTON: LOCK UI
+local function buttonLockOn() -- >>> LOCK UI ON: add code here.
+    State.UILocked = true -- <<< LOCK UI ON END
+end
+local function buttonLockOff() -- >>> LOCK UI OFF: add code here.
+    State.UILocked = false -- <<< LOCK UI OFF END
+end
+
+local function runButtonPair(onFunction, offFunction, enabled)
+    if enabled then onFunction() else offFunction() end
+end
+
+-- ACTION BUTTON: DROP
+local function buttonDropAction()
+    -- >>> DROP ACTION: put your own-experience action code here.
+    callHook("EclipseDuelsDrop", Config.DropMode)
+    -- <<< DROP ACTION END
+end
+
+-- ACTION BUTTON: TP DOWN
+local function buttonTPDownAction()
+    -- >>> TP DOWN ACTION: put your own-experience action code here.
+    callHook("EclipseDuelsTPDown")
+    -- <<< TP DOWN ACTION END
+end
+
+-- ACTION BUTTON: INSTA RESET
+local function buttonInstantResetAction()
+    -- >>> INSTA RESET ACTION: put your own-experience action code here.
+    callHook("EclipseDuelsInstantReset")
+    -- <<< INSTA RESET ACTION END
+end
+
+-- Anti-ragdoll zone: a small, reset-safe ON/OFF controller adapted from
+-- the supplied toggle idea. It does not force a speed or fling velocity;
+-- it only recovers the local humanoid from ragdoll-like states and asks
+-- the user's own server hook to apply any authoritative rules.
+local antiRagdollConnection
+setAntiRagdollEnabled = function(enabled)
+    State.AntiRagdoll = enabled == true
+    if antiRagdollConnection then
+        antiRagdollConnection:Disconnect()
+        antiRagdollConnection = nil
+    end
+    if State.AntiRagdoll then
+        antiRagdollConnection = RunService.Heartbeat:Connect(function()
+            if not State.AntiRagdoll then return end
+            local character = player.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+            if not humanoid or humanoid.Health <= 0 then return end
+            local humanoidState = humanoid:GetState()
+            local ragdollState = humanoidState == Enum.HumanoidStateType.Physics
+                or humanoidState == Enum.HumanoidStateType.Ragdoll
+                or humanoidState == Enum.HumanoidStateType.FallingDown
+            if ragdollState or humanoid.PlatformStand then
+                humanoid.PlatformStand = false
+                humanoid.AutoRotate = true
+                pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+                pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.Running) end)
+                local camera = workspace.CurrentCamera
+                if camera then camera.CameraSubject = humanoid end
+                for _, joint in ipairs(character:GetDescendants()) do
+                    if joint:IsA("Motor6D") and not joint.Enabled then joint.Enabled = true end
+                end
+            end
+        end)
+    end
+    local hookOk = callHook("EclipseDuelsAntiRagdoll", State.AntiRagdoll)
+    if hookOk then
+        status(State.AntiRagdoll and "ANTI RAGDOLL ON" or "ANTI RAGDOLL OFF")
+    elseif State.AntiRagdoll then
+        status("LOCAL ANTI ON / HOOK MISSING")
+    else
+        status("ANTI RAGDOLL OFF")
+    end
+end
+
+make = function(className, props, parent)
+    local object = Instance.new(className)
+    for key, value in pairs(props or {}) do object[key] = value end
+    object.Parent = parent
+    return object
+end
+
+corner = function(parent, radius)
+    local c = make("UICorner", {CornerRadius = UDim.new(0, radius or 8)}, parent)
+    return c
+end
+
+stroke = function(parent, color, thickness)
+    return make("UIStroke", {Color = color, Thickness = thickness or 1, Transparency = 0.12}, parent)
+end
+
+local C = {
+    black = Color3.fromRGB(2, 2, 4), panel = Color3.fromRGB(10, 8, 9), row = Color3.fromRGB(24, 15, 12),
+    orange = Color3.fromRGB(255, 138, 66), bright = Color3.fromRGB(255, 192, 139), muted = Color3.fromRGB(154, 138, 128),
+    white = Color3.fromRGB(246, 241, 237), green = Color3.fromRGB(124, 225, 173), red = Color3.fromRGB(255, 113, 113),
+}
+
+-- Localized, unobtrusive speed labels: this only reads replicated velocity.
+local labelData = {}
+local function clearPlayerLabels(plr)
+    local data = labelData[plr]
+    if data then
+        if data.connection then data.connection:Disconnect() end
+        if data.gui then data.gui:Destroy() end
+        labelData[plr] = nil
+    end
+end
+
+local function addPlayerLabel(plr)
+    if plr == player or not State.PlayerSpeedLabels or labelData[plr] then return end
+    local character = plr.Character
+    local head = character and character:FindFirstChild("Head")
+    if not head then return end
+    local old = head:FindFirstChild("EclipseSpeedLabel")
+    if old then old:Destroy() end
+    local gui = make("BillboardGui", {Name = "EclipseSpeedLabel", Size = UDim2.fromOffset(190, 38), StudsOffset = Vector3.new(0, 3.2, 0), AlwaysOnTop = true, Adornee = head}, head)
+    local text = make("TextLabel", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = Config.Discord .. "\nSPEED 0.0", TextColor3 = C.bright, TextStrokeTransparency = 0.25, Font = Enum.Font.GothamBold, TextScaled = true}, gui)
+    labelData[plr] = {gui = gui, text = text}
+end
+
+local function updateLabels()
+    for plr, data in pairs(labelData) do
+        local root = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+        if not root or not data.gui.Parent then clearPlayerLabels(plr) else
+            local velocity = root.AssemblyLinearVelocity
+            local horizontal = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+            data.text.Text = Config.Discord .. "\nSPEED " .. string.format("%.1f", horizontal)
+        end
+    end
+end
+
+refreshLabels = function()
+    if not State.PlayerSpeedLabels then
+        for plr in pairs(labelData) do clearPlayerLabels(plr) end
+        return
+    end
+    for _, plr in ipairs(Players:GetPlayers()) do addPlayerLabel(plr) end
+end
+
+Players.PlayerAdded:Connect(function(plr)
+    plr.CharacterAdded:Connect(function() task.wait(0.35); addPlayerLabel(plr) end)
+end)
+Players.PlayerRemoving:Connect(clearPlayerLabels)
+for _, plr in ipairs(Players:GetPlayers()) do
+    if plr ~= player then plr.CharacterAdded:Connect(function() task.wait(0.35); addPlayerLabel(plr) end) end
+end
+
+-- UI shell: black glass, eclipse artwork, orange controls, touch scrolling.
+local oldGui = guiParent:FindFirstChild("EclipseDuelsSafeUI")
+if oldGui then oldGui:Destroy() end
+local gui = make("ScreenGui", {Name = "EclipseDuelsSafeUI", ResetOnSpawn = false, IgnoreGuiInset = true, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 999, Enabled = true}, guiParent)
+warn("[Eclipse Duels] UI bootstrap created in " .. guiParent:GetFullName())
+local root = make("Frame", {Name = "Root", Size = UDim2.fromOffset(330, 500), Position = UDim2.new(0, 18, 0.5, -250), BackgroundColor3 = C.panel, BackgroundTransparency = 0.08, Active = true, Visible = true}, gui)
+corner(root, 18); stroke(root, C.orange, 1.4)
+artwork = make("ImageLabel", {Name = "EclipseArtwork", Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Image = Config.BackgroundImage, ImageTransparency = 0.56, ScaleType = Enum.ScaleType.Crop, ZIndex = 0}, root)
+corner(artwork, 18)
+local shade = make("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.black, BackgroundTransparency = 0.26, ZIndex = 1}, root); corner(shade, 18)
+local header = make("Frame", {Size = UDim2.new(1, 0, 0, 66), BackgroundTransparency = 1, ZIndex = 4}, root)
+local avatar = make("ImageLabel", {Size = UDim2.fromOffset(42, 42), Position = UDim2.fromOffset(12, 12), BackgroundColor3 = C.black, Image = Config.ProfileImage, ScaleType = Enum.ScaleType.Crop, ZIndex = 5}, header); corner(avatar, 21); stroke(avatar, C.orange, 1)
+local title = make("TextLabel", {Size = UDim2.new(1, -110, 0, 22), Position = UDim2.fromOffset(64, 12), BackgroundTransparency = 1, Text = Config.Brand, TextColor3 = C.white, Font = Enum.Font.GothamBlack, TextSize = 18, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5}, header)
+local subtitle = make("TextLabel", {Size = UDim2.new(1, -110, 0, 16), Position = UDim2.fromOffset(65, 35), BackgroundTransparency = 1, Text = Config.Subtitle, TextColor3 = C.bright, Font = Enum.Font.Code, TextSize = 9, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 5}, header)
+statusLabel = make("TextLabel", {Size = UDim2.fromOffset(88, 20), Position = UDim2.new(1, -132, 0, 13), BackgroundColor3 = Color3.fromRGB(36, 22, 16), Text = "READY", TextColor3 = C.green, Font = Enum.Font.Code, TextSize = 9, ZIndex = 6}, header); corner(statusLabel, 6)
+local hideButton = make("TextButton", {Size = UDim2.fromOffset(28, 26), Position = UDim2.new(1, -36, 0, 10), BackgroundColor3 = C.black, Text = "Ã—", TextColor3 = C.bright, Font = Enum.Font.GothamBold, TextSize = 18, AutoButtonColor = false, ZIndex = 6}, header); corner(hideButton, 7)
+
+local body = make("Frame", {Position = UDim2.fromOffset(10, 70), Size = UDim2.new(1, -20, 1, -80), BackgroundTransparency = 1, ZIndex = 4}, root)
+local tabs = make("Frame", {Size = UDim2.new(1, 0, 0, 34), BackgroundTransparency = 1}, body)
+local page = make("ScrollingFrame", {Position = UDim2.fromOffset(0, 40), Size = UDim2.new(1, 0, 1, -66), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 5, ScrollBarImageColor3 = C.orange, CanvasSize = UDim2.fromOffset(0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y, ScrollingDirection = Enum.ScrollingDirection.Y}, body)
+local pageLayout = make("UIListLayout", {Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder}, page)
+make("UIPadding", {PaddingLeft = UDim.new(0, 4), PaddingRight = UDim.new(0, 4), PaddingBottom = UDim.new(0, 12)}, page)
+
+local pages = {}
+local tabButtons = {}
+local function tab(name, order)
+    local button = make("TextButton", {Size = UDim2.new(0.25, -3, 1, 0), Position = UDim2.new((order - 1) * 0.25, order == 1 and 0 or 2, 0, 0), BackgroundColor3 = C.row, Text = name, TextColor3 = C.muted, Font = Enum.Font.GothamBold, TextSize = 10, AutoButtonColor = false}, tabs)
+    corner(button, 7); tabButtons[name] = button
+    local panel = make("Frame", {Name = name .. "Page", Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false, LayoutOrder = order}, page)
+    make("UIListLayout", {Padding = UDim.new(0, 5), SortOrder = Enum.SortOrder.LayoutOrder}, panel)
+    pages[name] = panel
+    button.MouseButton1Click:Connect(function()
+        for key, p in pairs(pages) do p.Visible = key == name end
+        for key, b in pairs(tabButtons) do b.BackgroundColor3 = key == name and C.orange or C.row; b.TextColor3 = key == name and C.black or C.muted end
+        page.CanvasPosition = Vector2.zero
+    end)
+    return panel
+end
+
+local speedPage = tab("SPEED", 1)
+local mechanicsPage = tab("MECHANICS", 2)
+local visualPage = tab("VISUAL", 3)
+local keyPage = tab("KEYS", 4)
+
+local function section(parent, text)
+    return make("TextLabel", {Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Text = text, TextColor3 = C.bright, Font = Enum.Font.GothamBold, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left}, parent)
+end
+
+local function row(parent, label, value, callback)
+    local item = make("Frame", {Size = UDim2.new(1, 0, 0, 35), BackgroundColor3 = C.row, BackgroundTransparency = 0.12}, parent); corner(item, 8); stroke(item, Color3.fromRGB(78, 39, 25), 0.8)
+    make("TextLabel", {Size = UDim2.new(1, -80, 1, 0), Position = UDim2.fromOffset(10, 0), BackgroundTransparency = 1, Text = label, TextColor3 = C.white, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left}, item)
+    local button = make("TextButton", {Size = UDim2.fromOffset(58, 23), Position = UDim2.new(1, -68, 0.5, -11), BackgroundColor3 = value and C.orange or C.black, Text = value and "ON" or "OFF", TextColor3 = value and C.black or C.muted, Font = Enum.Font.Code, TextSize = 10, AutoButtonColor = false}, item); corner(button, 6)
+    local state = value
+    local function set(on)
+        state = on; button.Text = on and "ON" or "OFF"; button.BackgroundColor3 = on and C.orange or C.black; button.TextColor3 = on and C.black or C.muted
+    end
+    button.MouseButton1Click:Connect(function() set(not state); if callback then callback(state) end end)
+    return set
+end
+
+local function valueRow(parent, label, value, callback)
+    local item = make("Frame", {Size = UDim2.new(1, 0, 0, 35), BackgroundColor3 = C.row, BackgroundTransparency = 0.12}, parent); corner(item, 8); stroke(item, Color3.fromRGB(78, 39, 25), 0.8)
+    make("TextLabel", {Size = UDim2.new(1, -90, 1, 0), Position = UDim2.fromOffset(10, 0), BackgroundTransparency = 1, Text = label, TextColor3 = C.white, Font = Enum.Font.GothamBold, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left}, item)
+    local input = make("TextBox", {Size = UDim2.fromOffset(66, 23), Position = UDim2.new(1, -74, 0.5, -11), BackgroundColor3 = C.black, Text = tostring(value), TextColor3 = C.bright, Font = Enum.Font.Code, TextSize = 10, ClearTextOnFocus = false}, item); corner(input, 6)
+    input.FocusLost:Connect(function() local n = tonumber(input.Text); if n then callback(n) else input.Text = tostring(value) end end)
+    return input
+end
+
+section(speedPage, "ECLIPSE SPEED MODES")
+valueRow(speedPage, "Normal Speed", Config.NormalSpeed, function(v) Config.NormalSpeed = math.clamp(v, 8, 120); callHook("EclipseDuelsSpeed", Config.NormalSpeed, false, false) end)
+valueRow(speedPage, "Carry Speed", Config.CarrySpeed, function(v) Config.CarrySpeed = math.clamp(v, 8, 120); callHook("EclipseDuelsCarrySpeed", Config.CarrySpeed, true) end)
+valueRow(speedPage, "Lagger Speed", Config.LaggerSpeed, function(v) Config.LaggerSpeed = math.clamp(v, 8, 80); callHook("EclipseDuelsLagger", Config.LaggerSpeed, false) end)
+valueRow(speedPage, "Lagger Carry", Config.LaggerCarrySpeed, function(v) Config.LaggerCarrySpeed = math.clamp(v, 8, 80); callHook("EclipseDuelsLagger", Config.LaggerCarrySpeed, true) end)
+row(speedPage, "Carry Mode", false, function(on) runButtonPair(buttonCarryOn, buttonCarryOff, on) end)
+row(speedPage, "Lagger Mode", false, function(on) runButtonPair(buttonLaggerOn, buttonLaggerOff, on) end)
+row(speedPage, "Lagger Carry Mode", false, function(on) runButtonPair(buttonLaggerCarryOn, buttonLaggerCarryOff, on) end)
+
+section(mechanicsPage, "OWN-EXPERIENCE MECHANICS")
+row(mechanicsPage, "Infinite Jump", State.InfiniteJump, function(on) runButtonPair(buttonInfiniteJumpOn, buttonInfiniteJumpOff, on) end)
+row(mechanicsPage, "Anti Ragdoll", State.AntiRagdoll, function(on)
+    runButtonPair(buttonAntiRagdollOn, buttonAntiRagdollOff, on)
+end)
+row(mechanicsPage, "Unwalk", false, function(on) runButtonPair(buttonUnwalkOn, buttonUnwalkOff, on) end)
+row(mechanicsPage, "Medusa Counter", false, function(on) runButtonPair(buttonMedusaOn, buttonMedusaOff, on) end)
+row(mechanicsPage, "Bat Counter", false, function(on) runButtonPair(buttonBatCounterOn, buttonBatCounterOff, on) end)
+row(mechanicsPage, "Auto Steal", State.AutoSteal, function(on) runButtonPair(buttonAutoStealOn, buttonAutoStealOff, on) end)
+row(mechanicsPage, "Auto Left", false, function(on) runButtonPair(buttonAutoLeftOn, buttonAutoLeftOff, on) end)
+row(mechanicsPage, "Auto Right", false, function(on) runButtonPair(buttonAutoRightOn, buttonAutoRightOff, on) end)
+row(mechanicsPage, "Auto TP", false, function(on) runButtonPair(buttonAutoTPOn, buttonAutoTPOff, on) end)
+row(mechanicsPage, "Drop", false, function() buttonDropAction() end)
+row(mechanicsPage, "Instant Reset", false, function() buttonInstantResetAction() end)
+row(mechanicsPage, "Auto Bat", false, function(on) runButtonPair(buttonAimbotOn, buttonAimbotOff, on) end)
+row(mechanicsPage, "Bat V2", false, function(on) runButtonPair(buttonBatV2On, buttonBatV2Off, on) end)
+
+section(visualPage, "ECLIPSE VISUALS")
+row(visualPage, "Player Speed Labels", State.PlayerSpeedLabels, function(on) runButtonPair(buttonSpeedLabelsOn, buttonSpeedLabelsOff, on) end)
+row(visualPage, "Player Name Tags", State.PlayerNameTags, function(on) runButtonPair(buttonNameTagsOn, buttonNameTagsOff, on) end)
+row(visualPage, "Eclipse Glow", Config.Glow, function(on) runButtonPair(buttonGlowOn, buttonGlowOff, on) end)
+row(visualPage, "Particle Effects", Config.Particles, function(on) runButtonPair(buttonParticlesOn, buttonParticlesOff, on) end)
+local discordRow = make("TextLabel", {Size = UDim2.new(1, 0, 0, 36), BackgroundTransparency = 1, Text = Config.Discord, TextColor3 = C.orange, Font = Enum.Font.Code, TextSize = 10, TextWrapped = true}, visualPage)
+
+section(keyPage, "KEYBINDS")
+local keyInfo = make("TextLabel", {Size = UDim2.new(1, 0, 0, 48), BackgroundTransparency = 1, Text = "Q  Carry   â€¢   R  Lagger   â€¢   Z  Auto Left   â€¢   C  Auto Right\nE  Auto Bat   â€¢   V  Bat V2   â€¢   F  TP Down   â€¢   LeftControl  Hide", TextColor3 = C.white, Font = Enum.Font.Code, TextSize = 10, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left}, keyPage)
+row(keyPage, "Lock UI", false, function(on) runButtonPair(buttonLockOn, buttonLockOff, on) end)
+row(keyPage, "Reset Position", false, function() root.Position = UDim2.new(0, 18, 0.5, -250) end)
+
+-- Mobile quick rail: the complete Eclipse action board from the reference layout.
+-- Every action still goes through an explicit hook in the user's own experience.
+local quick = make("Frame", {Size = UDim2.fromOffset(148, 300), Position = UDim2.new(1, -164, 0.5, -150), BackgroundTransparency = 1, Active = true}, gui)
+local quickLayout = make("UIGridLayout", {CellSize = UDim2.fromOffset(68, 52), CellPadding = UDim2.fromOffset(6, 6), FillDirection = Enum.FillDirection.Horizontal, FillDirectionMaxCells = 2, HorizontalAlignment = Enum.HorizontalAlignment.Center, VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder}, quick)
+local quickStates = {}
+local quickOrder = 0
+
+local function setQuickVisual(key, on)
+    local data = quickStates[key]
+    if not data then return end
+    data.on = on
+    data.button.BackgroundColor3 = on and C.orange or C.panel
+    data.button.TextColor3 = on and C.black or C.bright
+    data.button.TextStrokeTransparency = on and 1 or 0.55
+end
+
+local function quickToggle(key, text, hookName, valueFactory, initial, changeHandler)
+    quickOrder = quickOrder + 1
+    local button = make("TextButton", {BackgroundColor3 = initial and C.orange or C.panel, Text = text, TextColor3 = initial and C.black or C.bright, Font = Enum.Font.GothamBold, TextSize = 9, TextWrapped = true, TextStrokeTransparency = initial and 1 or 0.55, AutoButtonColor = false, LayoutOrder = quickOrder}, quick)
+    corner(button, 10); stroke(button, C.orange, 1)
+    quickStates[key] = {button = button, on = initial == true}
+    button.MouseButton1Click:Connect(function()
+        local nextState = not quickStates[key].on
+        setQuickVisual(key, nextState)
+        if changeHandler then changeHandler(nextState) else callHook(hookName, valueFactory and valueFactory(nextState) or nextState) end
+    end)
+    return button
+end
+
+local function quickAction(key, text, callback)
+    quickOrder = quickOrder + 1
+    local button = make("TextButton", {BackgroundColor3 = C.panel, Text = text, TextColor3 = C.bright, Font = Enum.Font.GothamBold, TextSize = 9, TextWrapped = true, TextStrokeTransparency = 0.55, AutoButtonColor = false, LayoutOrder = quickOrder}, quick)
+    corner(button, 10); stroke(button, C.orange, 1)
+    quickStates[key] = {button = button, on = false}
+    button.MouseButton1Click:Connect(callback)
+    return button
+end
+
+quickAction("drop", "DROP", function() buttonDropAction() end)
+quickToggle("autoLeft", "AUTO\nLEFT", nil, nil, State.AutoLeft, function(on) runButtonPair(buttonAutoLeftOn, buttonAutoLeftOff, on) end)
+quickToggle("bypass", "BYPASS", nil, nil, false, function(on) runButtonPair(buttonBypassOn, buttonBypassOff, on) end)
+quickToggle("aimbot", "AIMBOT", nil, nil, State.AutoBat, function(on) runButtonPair(buttonAimbotOn, buttonAimbotOff, on) end)
+quickToggle("autoRight", "AUTO\nRIGHT", nil, nil, State.AutoRight, function(on) runButtonPair(buttonAutoRightOn, buttonAutoRightOff, on) end)
+quickAction("tpDown", "TP\nDOWN", function() buttonTPDownAction() end)
+quickToggle("carrySpeed", "CARRY\nSPEED", nil, nil, State.Carry, function(on) runButtonPair(buttonCarryOn, buttonCarryOff, on) end)
+quickToggle("laggerMode", "LAGGER\nMODE", nil, nil, State.Lagger, function(on) runButtonPair(buttonLaggerOn, buttonLaggerOff, on) end)
+quickAction("instantReset", "INSTA\nRESET", function() buttonInstantResetAction() end)
+
+local chip = make("TextButton", {Size = UDim2.fromOffset(120, 30), Position = UDim2.fromOffset(18, 18), BackgroundColor3 = C.panel, Text = "ECLIPSE DUELS", TextColor3 = C.orange, Font = Enum.Font.GothamBold, TextSize = 10, Visible = false, AutoButtonColor = false}, gui); corner(chip, 15); stroke(chip, C.orange, 1)
+hideButton.MouseButton1Click:Connect(function() State.UIHidden = true; root.Visible = false; quick.Visible = false; chip.Visible = true end)
+chip.MouseButton1Click:Connect(function() State.UIHidden = false; root.Visible = true; quick.Visible = true; chip.Visible = false end)
+
+local function draggable(frame, handle)
+    local dragging, startInput, startPosition
+    handle = handle or frame
+    handle.InputBegan:Connect(function(input)
+        if State.UILocked then return end
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = true; startInput = input.Position; startPosition = frame.Position end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if not dragging then return end
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            local delta = input.Position - startInput
+            frame.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end end)
+end
+draggable(root, header); draggable(quick, quick)
+
+local function keyMatches(input, key) return input.KeyCode == key end
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed or State.UILocked or UserInputService:GetFocusedTextBox() then return end
+    if keyMatches(input, Enum.KeyCode.LeftControl) then root.Visible = not root.Visible; quick.Visible = root.Visible; chip.Visible = not root.Visible; return end
+    if keyMatches(input, Enum.KeyCode.Q) then State.Carry = not State.Carry; runButtonPair(buttonCarryOn, buttonCarryOff, State.Carry); setQuickVisual("carrySpeed", State.Carry)
+    elseif keyMatches(input, Enum.KeyCode.R) then State.Lagger = not State.Lagger; runButtonPair(buttonLaggerOn, buttonLaggerOff, State.Lagger); setQuickVisual("laggerMode", State.Lagger)
+    elseif keyMatches(input, Enum.KeyCode.Z) then State.AutoLeft = not State.AutoLeft; runButtonPair(buttonAutoLeftOn, buttonAutoLeftOff, State.AutoLeft); setQuickVisual("autoLeft", State.AutoLeft)
+    elseif keyMatches(input, Enum.KeyCode.C) then State.AutoRight = not State.AutoRight; runButtonPair(buttonAutoRightOn, buttonAutoRightOff, State.AutoRight); setQuickVisual("autoRight", State.AutoRight)
+    elseif keyMatches(input, Enum.KeyCode.E) then State.AutoBat = not State.AutoBat; runButtonPair(buttonAimbotOn, buttonAimbotOff, State.AutoBat); setQuickVisual("aimbot", State.AutoBat)
+    elseif keyMatches(input, Enum.KeyCode.V) then State.BatV2 = not State.BatV2; runButtonPair(buttonBatV2On, buttonBatV2Off, State.BatV2)
+    elseif keyMatches(input, Enum.KeyCode.F) then buttonTPDownAction()
+    elseif keyMatches(input, Enum.KeyCode.T) then buttonInstantResetAction() end
+end)
+
+-- Animation and frame loops are intentionally lightweight and reset-safe.
+RunService.Heartbeat:Connect(function()
+    if State.PlayerSpeedLabels then updateLabels() end
+end)
+player.CharacterAdded:Connect(function() task.wait(0.35); refreshLabels() end)
+refreshLabels()
+for name, button in pairs(tabButtons) do button.BackgroundColor3 = name == "SPEED" and C.orange or C.row; button.TextColor3 = name == "SPEED" and C.black or C.muted end
+pages.SPEED.Visible = true
+if State.AntiRagdoll then setAntiRagdollEnabled(true) end
+warn("[Eclipse Duels] Safe own-experience build loaded; unsupported external automation is disabled")
