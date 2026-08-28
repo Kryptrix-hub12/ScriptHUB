@@ -12,18 +12,18 @@ _G.SXEBuscaGui = function(nome)
     return r
 end
 do
-    task.spawn(function()
+    task.delay(0.35, function()
         pcall(function()
             local RS = game:GetService("ReplicatedStorage")
-            local pkgs = RS:WaitForChild("Packages", 15)
-            require(pkgs:WaitForChild("Synchronizer", 10))
-            local datas = RS:WaitForChild("Datas", 10)
-            require(datas:WaitForChild("Animals", 10))
-            require(datas:WaitForChild("Mutations", 30))
-            require(datas:WaitForChild("Traits", 30))
-            local utils = RS:WaitForChild("Utils", 30)
-            require(utils:WaitForChild("NumberUtils", 30))
-            pkgs:WaitForChild("Net", 30)
+            local pkgs = RS:WaitForChild("Packages", 30)
+            require(pkgs:WaitForChild("Synchronizer", 30))
+            local datas = RS:WaitForChild("Datas", 20)
+            require(datas:WaitForChild("Animals", 20))
+            require(datas:WaitForChild("Mutations", 15))
+            require(datas:WaitForChild("Traits", 15))
+            local utils = RS:WaitForChild("Utils", 15)
+            require(utils:WaitForChild("NumberUtils", 15))
+            pkgs:WaitForChild("Net", 15)
         end)
     end)
     task.spawn(function()
@@ -55,57 +55,14 @@ Lighting = game:GetService("Lighting")
 TeleportService = game:GetService("TeleportService")
 CoreGui = game:GetService("CoreGui")
 VirtualInputManager = game:GetService("VirtualInputManager")
-
-_G.AidenMobileOptimize = (_G.AidenMobileOptimize ~= false)
-
--- ============================================================
--- AIDEN HUB V2 / MOBILE PERFORMANCE PROFILE
--- Client-side only: avoids changing TP speed or game physics.
--- Heavy visual effects are disabled once, then only new effects are handled.
--- ============================================================
-do
-    if _G.AidenMobileOptimize ~= false then
-        task.defer(function()
-            local seen = setmetatable({}, {__mode = "k"})
-            local function optimize(obj)
-                if not obj or seen[obj] then return end
-                seen[obj] = true
-                pcall(function()
-                    if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") then
-                        obj.Enabled = false
-                    elseif obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
-                        obj.Enabled = false
-                    elseif obj:IsA("BasePart") and obj.CastShadow then
-                        obj.CastShadow = false
-                    end
-                end)
-            end
-
-            -- Process in small batches so auto-execute does not cause a frame spike.
-            local processed = 0
-            for _, obj in ipairs(Workspace:GetDescendants()) do
-                optimize(obj)
-                processed += 1
-                if processed % 250 == 0 then
-                    task.wait()
-                end
-            end
-
-            Workspace.DescendantAdded:Connect(function(obj)
-                task.defer(optimize, obj)
-            end)
-        end)
-    end
-end
-
 do
 local _xchan
 local _lastTry, _attempts = 0, 0
 local _deepScans, _lastDeep = 0, 0
 local _mod
-local MAX_ATTEMPTS, RETRY_GAP = 40, 0.5
+local MAX_ATTEMPTS, RETRY_GAP = 24, 0.35
 local BOOT_T0, BOOT_BURST, BOOT_GAP = os.clock(), 3.0, 0.10
-local MAX_DEEP, DEEP_GAP = 3, 1.5
+local MAX_DEEP, DEEP_GAP = 1, 0.75
 local function _retryGap()
     if (os.clock() - BOOT_T0) < BOOT_BURST then return BOOT_GAP end
     return RETRY_GAP
@@ -119,7 +76,7 @@ local function _channelCount(t)
             if type(v) == "table" and type(rawget(v, "CacheTable")) == "table" then
                 h = h + 1
             end
-            if n >= 200 then break end
+            if n >= 120 then break end
         end
         return h
     end)
@@ -167,12 +124,12 @@ local function _deepScan(mod)
     end
     for fname, fn in next, mod do
         if type(fn) == "function" then
-            for i = 1, 24 do
+            for i = 1, 14 do
                 local o, u = pcall(gu, fn, i)
                 if not o then break end
                 if type(u) == "table" then
                     consider(u, tostring(fname) .. "/" .. i)
-                    for j = 1, 4 do
+                    for j = 1, 2 do
                         consider(rawget(u, j), tostring(fname) .. "/" .. i .. "/" .. j)
                     end
                 end
@@ -275,7 +232,7 @@ local al=ct and ct.AnimalList
 return type(al)=="table" and al or nil
 end
 end
-task.spawn(function()
+task.delay(0.65, function()
     local WS = game:GetService("Workspace")
     local plots
     local t0 = os.clock()
@@ -285,7 +242,7 @@ task.spawn(function()
     until plots or (os.clock() - t0) > 25
     if not plots then return end
     local done, warmT0 = {}, os.clock()
-    while (os.clock() - warmT0) < 15 do
+    while (os.clock() - warmT0) < 8 do
         local kids = plots:GetChildren()
         local pending = false
         for _, plot in ipairs(kids) do
@@ -306,11 +263,11 @@ task.spawn(function()
             end
         end
         if not pending and #kids > 0 then break end
-        task.wait(0.05)
+        task.wait(0.08)
     end
     if _G.__LMARK then _G.__LMARK("plot data force-loaded") end
 end)
-task.spawn(function()
+task.delay(1.25, function()
     local Players = game:GetService("Players")
     local WS = game:GetService("Workspace")
     local lp = Players.LocalPlayer
@@ -330,19 +287,23 @@ task.spawn(function()
         local bp = plot:FindFirstChildWhichIsA("BasePart", true)
         return bp and bp.Position or nil
     end
-    local pending = 0
+    local pending, active = 0, 0
+    local maxConcurrent = 2
     for _, plot in ipairs(plots:GetChildren()) do
         local pos = plotPos(plot)
         if pos then
             pending = pending + 1
             task.spawn(function()
+                while active >= maxConcurrent do task.wait() end
+                active = active + 1
                 pcall(function() lp:RequestStreamAroundAsync(pos) end)
+                active = active - 1
                 pending = pending - 1
             end)
         end
     end
     local sw = os.clock()
-    while pending > 0 and os.clock() - sw < 10 do task.wait(0.05) end
+    while pending > 0 and os.clock() - sw < 8 do task.wait(0.06) end
     if _G.__LMARK then _G.__LMARK("plots stream-in requested") end
 end)
 do
@@ -546,8 +507,9 @@ do
     end
     applyCap()
     task.spawn(function()
-        while task.wait(5) do
+        while true do
             applyCap()
+            task.wait(2)
         end
     end)
 end
@@ -938,8 +900,7 @@ task.defer(LPH_NO_VIRTUALIZE(function()
             local item = table.remove(_G.__SXELazyQ, 1)
             local ok, err = pcall(item.fn)
             if not ok then print("[SXE Lazy]", item.name, err) end
-            task.defer(function() end)
-            task.wait(0.01)
+            task.wait(0.08)
         else
             task.wait(0.5)
         end
@@ -1091,17 +1052,18 @@ do
     barra.Parent = jpSg
     local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 9); c.Parent = barra
     local s = Instance.new("UIStroke")
-    s.Color = Color3.fromRGB(58, 55, 73); s.Thickness = 1; s.Transparency = 0.2; s.Parent = barra
+    s.Color = Color3.fromRGB(0, 0, 0); s.Thickness = 1.5; s.Transparency = 0.18; s.Parent = barra
     local faixa = Instance.new("Frame")
-    faixa.Size = UDim2.new(1, 0, 0, 2)
-    faixa.BackgroundColor3 = Color3.fromRGB( 24, 110, 225)
+    faixa.Size = UDim2.new(0, 0, 0, 0)
+    faixa.BackgroundTransparency = 1
     faixa.BorderSizePixel = 0
     faixa.ZIndex = 3
+    faixa.Visible = false
     faixa.Parent = barra
     local g = Instance.new("UIGradient")
     g.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB( 24, 110, 225)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(120, 195, 255)),
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(200, 200, 200)),
     })
     g.Parent = faixa
     local function _tituloGrad(label, cores, seg)
@@ -1143,7 +1105,7 @@ do
     nHub.Size = UDim2.new(0, 0, 0, 16)
     nHub.LayoutOrder = 1
     nHub.BackgroundTransparency = 1
-    nHub.Text = "Aiden Hub V2"
+    nHub.Text = "BIL HUB PRVT"
     nHub.Font = Enum.Font.GothamBlack
     nHub.TextSize = 13
     nHub.Parent = nome
@@ -1171,11 +1133,12 @@ do
         ColorSequenceKeypoint.new(1.00, Color3.fromRGB(180,  60,   0)),
     }, 4)
     local stats = Instance.new("TextLabel")
+    stats.Name = "BilStatsLabel"
     stats.Size = UDim2.new(0.55, 0, 0, 12)
     stats.Position = UDim2.new(0, 5, 0, 22)
     stats.BackgroundTransparency = 1
     stats.Text = "FPS: -- | PING: --"
-    stats.TextColor3 = Color3.fromRGB( 46,  74, 116)
+    stats.TextColor3 = Color3.fromRGB(255, 255, 255)
     stats.Font = Enum.Font.GothamMedium
     stats.TextSize = 10
     stats.TextXAlignment = Enum.TextXAlignment.Center
@@ -1254,9 +1217,9 @@ Themes = {
     Light = {
         Background=Color3.fromRGB(249,251,254), MainBackground=Color3.fromRGB(241,245,251),
         Panel=Color3.fromRGB(233,239,248), Row=Color3.fromRGB(224,233,245), RowHover=Color3.fromRGB(210,223,241),
-        Accent=Color3.fromRGB(24,110,225), AccentLight=Color3.fromRGB(64,150,250),
+        Accent=Color3.fromRGB(255,255,255), AccentLight=Color3.fromRGB(255,255,255),
         Green=Color3.fromRGB(22,163,94), Red=Color3.fromRGB(220,54,84), Red2=Color3.fromRGB(178,34,64),
-        Text=Color3.fromRGB(18,22,30), Dim=Color3.fromRGB(104,116,136), Stroke=Color3.fromRGB(196,210,230),
+        Text=Color3.fromRGB(18,22,30), Dim=Color3.fromRGB(104,116,136), Stroke=Color3.fromRGB(255,255,255),
         SoftButton=Color3.fromRGB(228,236,248), SoftButtonHover=Color3.fromRGB(214,226,244),
         SoftAccent=Color3.fromRGB(228,236,248), SoftAccentHover=Color3.fromRGB(214,226,244),
         ToggleOff=Color3.fromRGB(206,218,236), ToggleOff2=Color3.fromRGB(206,218,236),
@@ -1266,9 +1229,9 @@ Themes = {
     Dark = {
         Background=Color3.fromRGB(19,21,26), MainBackground=Color3.fromRGB(13,15,19),
         Panel=Color3.fromRGB(27,30,36), Row=Color3.fromRGB(33,37,45), RowHover=Color3.fromRGB(45,51,62),
-        Accent=Color3.fromRGB(24,110,225), AccentLight=Color3.fromRGB(96,175,255),
+        Accent=Color3.fromRGB(255,255,255), AccentLight=Color3.fromRGB(255,255,255),
         Green=Color3.fromRGB(74,222,138), Red=Color3.fromRGB(242,92,114), Red2=Color3.fromRGB(198,48,82),
-        Text=Color3.fromRGB(238,243,250), Dim=Color3.fromRGB(132,142,158), Stroke=Color3.fromRGB(52,60,72),
+        Text=Color3.fromRGB(238,243,250), Dim=Color3.fromRGB(132,142,158), Stroke=Color3.fromRGB(255,255,255),
         SoftButton=Color3.fromRGB(35,39,47), SoftButtonHover=Color3.fromRGB(48,54,65),
         SoftAccent=Color3.fromRGB(35,39,47), SoftAccentHover=Color3.fromRGB(48,54,65),
         ToggleOff=Color3.fromRGB(42,47,57), ToggleOff2=Color3.fromRGB(42,47,57),
@@ -1276,7 +1239,7 @@ Themes = {
         BlacklistHover=Color3.fromRGB(96,44,54), BlacklistLeave=Color3.fromRGB(48,54,65),
     }
 }
-BIL = { NOME="BIL", GRAD_A=Color3.fromRGB(24,110,225), GRAD_B=Color3.fromRGB(120,195,255) }
+BIL = { NOME="BIL", GRAD_A=Color3.fromRGB(255,255,255), GRAD_B=Color3.fromRGB(220,220,220) }
 Theme = {}
 for k, v in pairs(Themes.Dark) do
     Theme[k] = v
@@ -1420,7 +1383,7 @@ function applyTheme(themeName)
                     pcall(function()
                         local current = inst[prop]
                         if typeof(current) == "Color3" then
-                            if prop == "TextColor3" and inst.Name == "WhiteTextBtn" then
+                            if prop == "TextColor3" and (inst.Name == "WhiteTextBtn" or inst.Name == "BilStatsLabel") then
                                 return
                             end
                             if prop == "BackgroundColor3" and inst.Name == "WhiteSliderKnob" then
@@ -1670,11 +1633,6 @@ Config = {
     StealHighest=false, StealPriority=true, StealNearest=false,
     AutoStealEnabled=true,
     Unwalk=false,
-    -- Aiden Hub V2 fast/mobile profile
-    AidenFastBoot=true,
-    AidenMobileOptimize=true,
-    AidenQuickTPMode="Priority",
-    AidenInstaReset=true,
     Visibilities = {
         ["Invisible Steal Panel"] = true,
         ["Admin Command Panel"] = true,
@@ -3846,8 +3804,8 @@ hudGui.Parent = ((gethui and gethui()) or game:GetService("CoreGui"))
 local STEALBAR = {
     PANEL = Color3.fromRGB(15, 15, 15),
     TEXT = Color3.fromRGB(255, 255, 255),
-    STROKE = Color3.fromRGB(60, 40, 55),
-    GLOW = Color3.fromRGB(30, 30, 30),
+    STROKE = Color3.fromRGB(255, 255, 255),
+    GLOW = Color3.fromRGB(200, 200, 200),
     TRACK = Color3.fromRGB(55, 40, 50),
     TRACK2 = Color3.fromRGB(35, 30, 35),
     FILL1 = Color3.fromRGB(50, 50, 50),
@@ -4111,9 +4069,14 @@ if _G.addLazyUI then _G.addLazyUI(alertGui, true, true) end
     local corner = Instance.new("UICorner", alertFrame)
     corner.CornerRadius = UDim.new(0, 10)
     local stroke = Instance.new("UIStroke", alertFrame)
-    stroke.Color = strokeColor
+    stroke.Color = Color3.fromRGB(255, 255, 255)
     stroke.Thickness = 1.5
-    stroke.Transparency = 0.12
+    stroke.Transparency = 0.15
+    local strokeGlow = Instance.new("UIStroke", alertFrame)
+    strokeGlow.Color = Color3.fromRGB(255, 255, 255)
+    strokeGlow.Thickness = 4
+    strokeGlow.Transparency = 0.72
+    strokeGlow.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     local bottomAccent = Instance.new("Frame", alertFrame)
     bottomAccent.Size = UDim2.new(1, -24, 0, 3)
     bottomAccent.Position = UDim2.new(0.5, 0, 1, -4)
@@ -4466,6 +4429,8 @@ task.spawn(function()
         end
         local vistos, novos = {}, {}
         local nSync, nRend = 0, 0
+        local petStatsCache = _G.__SXEPetStatsCache or {}
+        _G.__SXEPetStatsCache = petStatsCache
         local function addPet(idx, mut, traits, slot, mpsFallback, viaSync)
             if type(idx) ~= "string" or slot == nil then return end
             local info = AnimalsData and AnimalsData[idx]
@@ -4476,17 +4441,24 @@ task.spawn(function()
             vistos[chave] = true
             local m = mut or "None"; if m == "Yin Yang" then m = "YinYang" end
             local tTxt = (type(traits)=="table" and #traits>0) and table.concat(traits, ", ") or "None"
-            local gv
-            pcall(function() gv = AnimalsShared:GetGeneration(idx, mut, traits, nil) end)
-            if type(gv) ~= "number" and type(mpsFallback) == "function" then
-                gv = mpsFallback()
-            elseif type(gv) ~= "number" then
-                gv = mpsFallback
+            local statKey = idx .. "|" .. m .. "|" .. tTxt
+            local cached = petStatsCache[statKey]
+            local gv, pv
+            if cached then
+                gv, pv = cached[1], cached[2]
+            else
+                pcall(function() gv = AnimalsShared:GetGeneration(idx, mut, traits, nil) end)
+                if type(gv) ~= "number" and type(mpsFallback) == "function" then
+                    gv = mpsFallback()
+                elseif type(gv) ~= "number" then
+                    gv = mpsFallback
+                end
+                if type(gv) ~= "number" then return end
+                pv = 0
+                pcall(function() pv = AnimalsShared:GetValue(idx, mut, traits, nil) or 0 end)
+                if type(pv) ~= "number" then pv = 0 end
+                petStatsCache[statKey] = {gv, pv}
             end
-            if type(gv) ~= "number" then return end
-            local pv = 0
-            pcall(function() pv = AnimalsShared:GetValue(idx, mut, traits, nil) or 0 end)
-            if type(pv) ~= "number" then pv = 0 end
             novos[#novos+1] = {
                 name = info.DisplayName or idx, index = idx,
                 genText = "$" .. _fmtGen(gv) .. "/s", genValue = gv, petValue = pv,
@@ -4549,7 +4521,7 @@ task.spawn(function()
                 local ok, r = pcall(function() return _canalDoPlot(plot) end)
                 if ok and r then c2 = r; ch = r; scanSinglePlot(plot); break end
                 r2 = r2 + 1
-                task.wait(0.07)
+                task.wait(0.04)
             end
         end)
         local _pend = false
@@ -4557,7 +4529,7 @@ task.spawn(function()
             if _pend then return end
             _pend = true
             task.defer(function()
-                task.wait(0.03)
+                task.wait(0.01)
                 _pend = false
                 scanSinglePlot(plot)
             end)
@@ -4565,7 +4537,7 @@ task.spawn(function()
         plot.ChildAdded:Connect(agora)
         plot.ChildRemoved:Connect(agora)
         if phase and phase > 0 then task.wait(phase) end
-        task.spawn(function() while plot.Parent do task.wait(0.25); scanSinglePlot(plot) end end)
+        task.spawn(function() while plot.Parent do task.wait(0.12); scanSinglePlot(plot) end end)
     end
     local plots=Workspace:WaitForChild("Plots",8)
     if plots then
@@ -4945,129 +4917,108 @@ end
 function prepMiniTpTool(hum, hrp)
     if not hum or not hrp then return end
 end
-local _AidenFastTarget = nil
-local _AidenFastTargetAt = 0
-local _AidenFastTargetMode = nil
-
-local function _AidenGetMode()
-    if Config.AidenQuickTPMode then return Config.AidenQuickTPMode end
-    if Config.StealHighest or Config.AutoTPHighestGen then return "Highest" end
-    if Config.StealNearest then return "Nearest" end
-    return "Priority"
-end
-
-local function _AidenRefreshTarget(force)
-    local now = os.clock()
-    local mode = _AidenGetMode()
-    if not force and _AidenFastTargetMode == mode and (now - _AidenFastTargetAt) < 0.035 then
-        return _AidenFastTarget
-    end
-
-    local cache = SharedState and SharedState.AllAnimalsCache
-    if type(cache) ~= "table" or #cache == 0 then
-        _AidenFastTarget = nil
-        _AidenFastTargetAt = now
-        _AidenFastTargetMode = mode
+local function getTargetPetData()
+    local cache = SharedState.AllAnimalsCache
+    if not cache or #cache == 0 then
         return nil
     end
-
-    local myName, myDisplay = LocalPlayer.Name, LocalPlayer.DisplayName
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    local myPos = hrp and hrp.Position
-    local plots = Workspace:FindFirstChild("Plots")
-
-    -- Cache plot positions for this pass instead of calling GetPivot repeatedly.
-    local plotPos = {}
-    if plots then
-        for _, a in ipairs(cache) do
-            if a and a.plot and not plotPos[a.plot] then
-                local pl = plots:FindFirstChild(a.plot)
-                if pl then
-                    local ok, pos = pcall(function() return pl:GetPivot().Position end)
-                    if ok and pos then plotPos[a.plot] = pos end
-                end
-            end
-        end
-    end
-
-    local target
+    local pets = get_all_pets()
     if manuallySelectedUID then
         for _, a in ipairs(cache) do
-            if a and a.uid == manuallySelectedUID
-                and a.owner ~= myName and a.owner ~= myDisplay then
-                target = a
-                break
+            if a.uid == manuallySelectedUID and a.owner ~= LocalPlayer.Name then
+                return a
             end
         end
     end
-
-    if not target and mode == "Priority" then
-        -- Priority list is checked first; this avoids sorting the whole cache.
-        local wanted = {}
-        for i, name in ipairs(priorityList or {}) do
-            wanted[string.lower(name)] = i
-        end
-        local bestRank = math.huge
-        local bestGen = -math.huge
-        for _, a in ipairs(cache) do
-            if a and a.owner ~= myName and a.owner ~= myDisplay then
-                local n = a.name and string.lower(a.name)
-                local idx = n and wanted[n]
-                if idx and (idx < bestRank or (idx == bestRank and (a.genValue or 0) > bestGen)) then
-                    bestRank, bestGen, target = idx, a.genValue or 0, a
-                end
-            end
-        end
-    elseif not target and mode == "Highest" then
-        local bestGen = -math.huge
-        for _, a in ipairs(cache) do
-            if a and a.owner ~= myName and a.owner ~= myDisplay
-                and (a.genValue or 0) > bestGen then
-                bestGen, target = a.genValue or 0, a
-            end
-        end
-    elseif not target and mode == "Nearest" then
-        local minGen = parseMinGen(Config.TpSettings.MinGenForGrab or "")
+    for _, pName in ipairs(priorityList) do
+        local searchName = pName:lower()
+        local bestPet = nil
         local bestDist = math.huge
         for _, a in ipairs(cache) do
-            local gv = tonumber(a and a.genValue) or 0
-            if a and a.owner ~= myName and a.owner ~= myDisplay and gv >= minGen then
-                local pos = plotPos[a.plot]
-                local d = pos and myPos and (pos - myPos).Magnitude or math.huge
-                if d < bestDist then bestDist, target = d, a end
-            end
-        end
-    end
-
-    if not target then
-        -- Fast fallback for existing Auto-TP settings.
-        local minGen = parseMinGen(Config.TpSettings.MinGenForTp or "")
-        local bestGen = -math.huge
-        for _, a in ipairs(cache) do
-            if a and a.owner ~= myName and a.owner ~= myDisplay
-                and (tonumber(a.genValue) or 0) >= math.max(10000000, minGen) then
-                if (a.genValue or 0) > bestGen then
-                    bestGen, target = a.genValue or 0, a
+            if a and a.name and ((a.name:lower() == searchName) or (a.index and a.index:lower() == searchName)) and (a.owner ~= LocalPlayer.Name) then
+                local dist = math.huge
+                local char = LocalPlayer.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    local plots = Workspace:FindFirstChild("Plots")
+                    local plotInst = plots and plots:FindFirstChild(a.plot)
+                    if plotInst then
+                        local pos = nil
+                        pcall(function() pos = plotInst:GetPivot().Position end)
+                        if pos then
+                            dist = (hrp.Position - pos).Magnitude
+                        end
+                    end
+                end
+                if not bestPet then
+                    bestPet = a
+                    bestDist = dist
+                else
+                    local currentGen = a.genValue or 0
+                    local bestGen = bestPet.genValue or 0
+                    if currentGen > bestGen then
+                        bestPet = a
+                        bestDist = dist
+                    elseif currentGen == bestGen then
+                        if dist < bestDist then
+                            bestPet = a
+                            bestDist = dist
+                        end
+                    end
                 end
             end
         end
+        if bestPet then
+            return bestPet
+        end
     end
-
-    _AidenFastTarget = target
-    _AidenFastTargetAt = now
-    _AidenFastTargetMode = mode
-    return target
+    local _mgStr = (Config.StealNearest and Config.TpSettings.MinGenForGrab) or Config.TpSettings.MinGenForTp
+    local _brainrotFloor = math.max(10000000, parseMinGen(_mgStr) or 0)
+    local bestBrainrot = nil
+    local bestBrainrotDist = math.huge
+    for _, a in ipairs(cache) do
+        if a and a.owner ~= LocalPlayer.Name and a.genValue and a.genValue >= _brainrotFloor then
+            local dist = math.huge
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local plots = Workspace:FindFirstChild("Plots")
+                local plotInst = plots and plots:FindFirstChild(a.plot)
+                if plotInst then
+                    local pos = nil
+                    pcall(function() pos = plotInst:GetPivot().Position end)
+                    if pos then dist = (hrp.Position - pos).Magnitude end
+                end
+            end
+            if dist < bestBrainrotDist then
+                bestBrainrotDist = dist
+                bestBrainrot = a
+            end
+        end
+    end
+    if bestBrainrot then return bestBrainrot end
+    if Config.AutoTPHighestGen then
+        if pets and #pets > 0 then
+            return pets[1].animalData
+        end
+    end
+    if Config.AutoTPHighestValue then
+        local valuePets = get_all_pets_by_value()
+        if valuePets and #valuePets > 0 then
+            return valuePets[1].animalData
+        end
+    end
+    if Config.AutoTPPriority then
+        if pets and #pets > 0 then
+            return pets[1].animalData
+        end
+        return nil
+    end
+    if SharedState.SelectedPetData then
+        return SharedState.SelectedPetData.animalData
+    end
+    return nil
 end
-
-local function getTargetPetData()
-    return _AidenRefreshTarget(false)
-end
-
-_G.AidenRefreshFastTarget = function()
-    return _AidenRefreshTarget(true)
-end
-
 local doGrabbleVelocityTP
 do
 local UPPER = {
@@ -6690,7 +6641,8 @@ local function createBrainrotBillboard(data)
     bb.StudsOffset=Vector3.new(0,1.8,0); bb.AlwaysOnTop=true; bb.LightInfluence=0; bb.MaxDistance=3000
     local container=Instance.new("Frame",bb); container.Size=UDim2.new(1,0,1,0); container.BackgroundColor3=Color3.fromRGB(0,0,0)
     container.BackgroundTransparency=0.5; container.BorderSizePixel=0; Instance.new("UICorner",container).CornerRadius=UDim.new(0,4)
-    local stroke=Instance.new("UIStroke",container); stroke.Color=Color3.fromRGB(175,175,175); stroke.Thickness=1.5; stroke.Transparency=0.2
+    local stroke=Instance.new("UIStroke",container); stroke.Color=Color3.fromRGB(255,255,255); stroke.Thickness=1.5; stroke.Transparency=0.15
+    local strokeGlow=Instance.new("UIStroke",container); strokeGlow.Color=Color3.fromRGB(255,255,255); strokeGlow.Thickness=4; strokeGlow.Transparency=0.72; strokeGlow.ApplyStrokeMode=Enum.ApplyStrokeMode.Border
     local nameLabel=Instance.new("TextLabel",container); nameLabel.Size=UDim2.new(1,-6,0,18); nameLabel.Position=UDim2.new(0,3,0,2)
     nameLabel.BackgroundTransparency=1; nameLabel.Font=Enum.Font.GothamBlack; nameLabel.TextSize=13; nameLabel.TextColor3=Color3.fromRGB(175,175,175)
     nameLabel.TextStrokeTransparency=0; nameLabel.TextStrokeColor3=Color3.fromRGB(0,0,0); nameLabel.Text=data.name or "???"; nameLabel.TextXAlignment=Enum.TextXAlignment.Center
@@ -6719,8 +6671,8 @@ local function refreshBrainrotESP()
 end
 local function clearBrainrotESP() for _,e in pairs(brainrotBillboards) do if e.bb then e.bb:Destroy() end; if e.highlight then e.highlight:Destroy() end end; brainrotBillboards={} end
 task.spawn(function()
-    task.wait(4)
-    while true do task.wait(0.6)
+    task.wait(2)
+    while true do task.wait(0.35)
         if brainrotESPEnabled then pcall(refreshBrainrotESP) end
     end
 end)
@@ -7936,7 +7888,7 @@ local function buildRemoteSell()
     local rsFrame=Instance.new("Frame", registerScreenGui(remoteSellGui)); rsFrame.Size=UDim2.new(0,190,0,240)
     rsFrame.Position=UDim2.new(0,350,1,-350); rsFrame.BackgroundColor3=Theme.MainBackground; rsFrame.BackgroundTransparency=0.06; rsFrame.BorderSizePixel=0
     Instance.new("UICorner",rsFrame).CornerRadius=UDim.new(0,12)
-    local rsStroke=Instance.new("UIStroke",rsFrame); rsStroke.Color=Theme.AccentLight; rsStroke.Thickness=1.25; rsStroke.Transparency=0.08
+    local rsStroke=Instance.new("UIStroke",rsFrame); rsStroke.Color=Color3.fromRGB(255,255,255); rsStroke.Thickness=1.5; rsStroke.Transparency=0.15
     applySavedPosition("Remote Sell", rsFrame)
     local rsHeader=Instance.new("Frame",rsFrame); rsHeader.Size=UDim2.new(1,0,0,30); rsHeader.BackgroundTransparency=1; rsHeader.Active=true
     local rsTitle=Instance.new("TextLabel",rsHeader); rsTitle.Size=UDim2.new(1,-20,0,30); rsTitle.Position=UDim2.new(0,10,0,5)
@@ -8147,8 +8099,8 @@ _G.ShowStealProgressBar = function(targetName, duration)
     local container = Instance.new("Frame")
     container.Size = UDim2.fromOffset(barWidth, barHeight)
     container.Position = UDim2.new(0.5, -barWidth/2, 1, -190)
-    container.BackgroundColor3 = Theme.Background
-    container.BackgroundTransparency = 0.02
+    container.BackgroundColor3 = Color3.fromRGB(8,10,14)
+    container.BackgroundTransparency = 0.30
     container.BorderSizePixel = 0
     container.Parent = registerScreenGui(sg)
     corner(container, 12)
@@ -8233,7 +8185,19 @@ _G.HideStealProgressBar = function()
     end
 end
 corner = function(o,r) local c=Instance.new("UICorner"); c.CornerRadius=UDim.new(0,r); c.Parent=o; return c end
-stroke = function(o,col,th,tr) local s=Instance.new("UIStroke"); s.Color=col or Theme.Stroke; s.Thickness=th or 1; s.Transparency=tr or 0; s.ApplyStrokeMode=Enum.ApplyStrokeMode.Border; s.Parent=o; return s end
+stroke = function(o,col,th,tr)
+    local useCol = col
+    if not useCol or useCol == Theme.Stroke or useCol == Theme.Accent or useCol == Theme.AccentLight then
+        useCol = Color3.fromRGB(255, 255, 255)
+    end
+    local s = Instance.new("UIStroke")
+    s.Color = useCol; s.Thickness = th or 1; s.Transparency = tr or 0
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; s.Parent = o
+    local glow = Instance.new("UIStroke")
+    glow.Color = Color3.fromRGB(255, 255, 255); glow.Thickness = (th or 1) + 2
+    glow.Transparency = 0.74; glow.ApplyStrokeMode = Enum.ApplyStrokeMode.Border; glow.Parent = o
+    return s
+end
 tw = function(o,p,t) TweenService:Create(o,TweenInfo.new(t or 0.14,Enum.EasingStyle.Quint,Enum.EasingDirection.Out),p):Play() end
 local _capAtiva = nil
 function cancelarCaptura()
@@ -8282,9 +8246,9 @@ addOutline = function(f)
     if not f then return end
     local s = Instance.new("UIStroke")
     s.Name = "BilOutline"
-    s.Color = Theme.Stroke
-    s.Thickness = 1
-    s.Transparency = 0.2
+    s.Color = Color3.fromRGB(255, 255, 255)
+    s.Thickness = 1.5
+    s.Transparency = 0.18
     s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     s.Parent = f
     return s
@@ -8351,7 +8315,7 @@ function makeHeader(f,t,isMain)
     local parts={}; for s in string.gmatch(t,"([^\n]+)") do table.insert(parts,s) end
     local function marca(txt)
         if not txt then return txt end
-        return (txt:gsub("Aiden Hub V2",(BIL and BIL.NOME) or "BIL"))
+        return (txt:gsub("BIL HUB PRIVATE",(BIL and BIL.NOME) or "BIL"))
     end
     if isMain then
         local l=Instance.new("TextLabel"); l.Size=UDim2.new(1,-50,0,24); l.Position=UDim2.new(0,13,0,10)
@@ -8368,13 +8332,13 @@ function makeHeader(f,t,isMain)
     makeDraggable(f,h,t)
     return h
 end
-function makeMainPanel(t,size,pos) local f=Instance.new("Frame"); f.Size=size; f.Position=pos; f.BackgroundColor3=Color3.fromRGB(25,85,155); f.BackgroundTransparency=0.28; f.BorderSizePixel=0; f.ClipsDescendants=true; f.Parent=gui; corner(f,12); addOutline(f); makeHeader(f,t,true)
+function makeMainPanel(t,size,pos) local f=Instance.new("Frame"); f.Size=size; f.Position=pos; f.BackgroundColor3=Color3.fromRGB(8,10,14); f.BackgroundTransparency=0.36; f.BorderSizePixel=0; f.ClipsDescendants=true; f.Parent=gui; corner(f,12); addOutline(f); makeHeader(f,t,true)
     local body=Instance.new("ScrollingFrame"); body.Size=UDim2.new(1,-12,1,-82); body.Position=UDim2.new(0,6,0,76); body.BackgroundTransparency=1; body.BorderSizePixel=0; body.ScrollBarThickness=3; body.ScrollBarImageColor3=Theme.Accent; body.CanvasSize=UDim2.new(0,0,0,0); body.Active=true; body.Parent=f
     local lay=Instance.new("UIListLayout"); lay.Padding=UDim.new(0,6); lay.Parent=body
     lay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() body.CanvasSize=UDim2.new(0,0,0,lay.AbsoluteContentSize.Y+10) end);
     if Config.sizes and Config.sizes[t] then f.Size = UDim2.new(0, Config.sizes[t].x, 0, Config.sizes[t].y) end
     makeResizable(f, UDim2.new(0, 200, 0, 150), t); return f,body end
-function makeQuickPanel(t,size,pos) local f=Instance.new("Frame"); f.Size=size; f.Position=pos; f.BackgroundColor3=Color3.fromRGB(25,85,155); f.BackgroundTransparency=0.34; f.BorderSizePixel=0; f.ClipsDescendants=true; f.Parent=gui; corner(f,12); addOutline(f); makeHeader(f,t,false)
+function makeQuickPanel(t,size,pos) local f=Instance.new("Frame"); f.Size=size; f.Position=pos; f.BackgroundColor3=Color3.fromRGB(8,10,14); f.BackgroundTransparency=0.42; f.BorderSizePixel=0; f.ClipsDescendants=true; f.Parent=gui; corner(f,12); addOutline(f); makeHeader(f,t,false)
     local body=Instance.new("ScrollingFrame"); body.Size=UDim2.new(1,-12,1,-50); body.Position=UDim2.new(0,6,0,46); body.BackgroundTransparency=1; body.BorderSizePixel=0; body.ScrollBarThickness=3; body.ScrollBarImageColor3=Theme.Accent; body.CanvasSize=UDim2.new(0,0,0,0); body.Active=true; body.Parent=f
     local lay=Instance.new("UIListLayout"); lay.Padding=UDim.new(0,6); lay.Parent=body
     lay:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() body.CanvasSize=UDim2.new(0,0,0,lay.AbsoluteContentSize.Y+10) end);
@@ -8547,7 +8511,7 @@ function makeMainSliderWithInput(parent,text,min,max,default,callback,suffix)
     end)
     return row
 end
-function makeMainButton(parent,text,callback,color) local b=Instance.new("TextButton"); b.Size=UDim2.new(1,-4,0,30); b.BackgroundColor3=color or Theme.Row; b.BackgroundTransparency=0.16; b.Text=text; b.TextColor3=Theme.Text; b.Font=Enum.Font.GothamBold; b.TextSize=11; b.AutoButtonColor=false; b.Parent=parent; corner(b,6); stroke(b,Theme.AccentLight,1,0.28)
+function makeMainButton(parent,text,callback,color) local b=Instance.new("TextButton"); b.Size=UDim2.new(1,-4,0,30); b.BackgroundColor3=color or Theme.Row; b.BackgroundTransparency=0.16; b.Text=text; b.TextColor3=Theme.Text; b.Font=Enum.Font.GothamBold; b.TextSize=11; b.AutoButtonColor=false; b.Parent=parent; corner(b,6); stroke(b,Color3.fromRGB(255,255,255),1.5,0.25)
     b.MouseEnter:Connect(function() tw(b,{BackgroundColor3=color or Theme.RowHover},0.12) end); b.MouseLeave:Connect(function() tw(b,{BackgroundColor3=color or Theme.Row},0.12) end)
     b.MouseButton1Click:Connect(function() if callback then callback() end end); return b end
 function makeMainToggle(parent,text,enabled,callback)
@@ -8580,106 +8544,24 @@ function makeKeybindRow(parent,nameText)
         local con; con=UIS.InputBegan:Connect(function(input,gp) if gp then return end; if input.UserInputType==Enum.UserInputType.Keyboard then Keybinds[nameText]=input.KeyCode.Name; Config.keybinds[nameText]=input.KeyCode.Name; saveConfig(); key.Text=input.KeyCode.Name; if nameText=="Open Menu" then UI.OpenMenuKey=input.KeyCode end; con:Disconnect(); if updateMovementPanelLabels then updateMovementPanelLabels() end end end)
     end)
 end
-main,mainBody=makeMainPanel("Aiden Hub V2 PAID",UDim2.new(0,330,0,420),UDim2.new(0.5,-165,1,-445))
+main,mainBody=makeMainPanel("BIL HUB PRIVATE PAID",UDim2.new(0,330,0,420),UDim2.new(0.5,-165,1,-445))
 if Config.AutoCloseOnExec then main.Visible = false end
-panels["Invisible Steal Panel"],panels["InvisStealBody"]=makeQuickPanel("Aiden Hub V2\nInvisible Steal",UDim2.new(0,230,0,375),UDim2.new(0,80,0.5,-220))
+panels["Invisible Steal Panel"],panels["InvisStealBody"]=makeQuickPanel("BIL HUB PRIVATE\nInvisible Steal",UDim2.new(0,230,0,375),UDim2.new(0,80,0.5,-220))
 panels["InvisStealBody"].ScrollBarThickness = 0
 panels["InvisStealBody"].ScrollingEnabled = false
-panels["Admin Command Panel"],panels["AdminBody"]=makeQuickPanel("Aiden Hub V2\nAdmin Command Panel",UDim2.new(0,225,0,240),UDim2.new(0.5,85,1,-340))
-panels["Command Cooldowns"],panels["CooldownBody"]=makeQuickPanel("Aiden Hub V2\nCommand Cooldowns",UDim2.new(0,210,0,315),UDim2.new(0.5,245,1,-390))
-panels["Actions"],panels["ActionsBody"]=makeQuickPanel("Aiden Hub V2\nActions",UDim2.new(0,230,0,340),UDim2.new(0.5,505,1,-415))
-panels["Steal Panel"],panels["StealBody"]=makeQuickPanel("Aiden Hub V2\nSteal Panel",UDim2.new(0,235,0,300),UDim2.new(1,-300,1,-385))
-panels["Steal Target"],panels["TargetBody"]=makeQuickPanel("Aiden Hub V2\nSteal Target",UDim2.new(0,320,0,380),UDim2.new(1,-330,0,85))
-actionSettingsPanel,actionSettingsBody=makeQuickPanel("Aiden Hub V2\nAction Settings",UDim2.new(0,230,0,370),UDim2.new(0.5,745,1,-440))
+panels["Admin Command Panel"],panels["AdminBody"]=makeQuickPanel("BIL HUB PRIVATE\nAdmin Command Panel",UDim2.new(0,225,0,240),UDim2.new(0.5,85,1,-340))
+panels["Command Cooldowns"],panels["CooldownBody"]=makeQuickPanel("BIL HUB PRIVATE\nCommand Cooldowns",UDim2.new(0,210,0,315),UDim2.new(0.5,245,1,-390))
+panels["Actions"],panels["ActionsBody"]=makeQuickPanel("BIL HUB PRIVATE\nActions",UDim2.new(0,230,0,340),UDim2.new(0.5,505,1,-415))
+panels["Steal Panel"],panels["StealBody"]=makeQuickPanel("BIL HUB PRIVATE\nSteal Panel",UDim2.new(0,235,0,300),UDim2.new(1,-300,1,-385))
+panels["Steal Target"],panels["TargetBody"]=makeQuickPanel("BIL HUB PRIVATE\nSteal Target",UDim2.new(0,320,0,380),UDim2.new(1,-330,0,85))
+actionSettingsPanel,actionSettingsBody=makeQuickPanel("BIL HUB PRIVATE\nAction Settings",UDim2.new(0,230,0,370),UDim2.new(0.5,745,1,-440))
 actionSettingsPanel.Visible=false
-tpSpeedSettingsPanel,tpSpeedSettingsBody=makeQuickPanel("Aiden Hub V2\nTP & Clone Settings",UDim2.new(0,235,0,325),UDim2.new(0.5,745,1,-440))
+tpSpeedSettingsPanel,tpSpeedSettingsBody=makeQuickPanel("BIL HUB PRIVATE\nTP & Clone Settings",UDim2.new(0,235,0,325),UDim2.new(0.5,745,1,-440))
 tpSpeedSettingsPanel.Visible=false
-
--- ============================================================
--- AIDEN HUB V2 / QUICK PANEL
--- Mobile-first controls. Uses the existing panel/button system.
--- ============================================================
-do
-    local quickPanel, quickBody = makeQuickPanel(
-        "Aiden Hub V2\nQuick Panel",
-        UDim2.new(0, 220, 0, 270),
-        UDim2.new(1, -230, 1, -300)
-    )
-    panels["Quick Panel"] = quickPanel
-    panels["Quick Panel Body"] = quickBody
-
-    local function aidenMode(mode, label)
-        Config.AidenQuickTPMode = mode
-        if mode == "Priority" then
-            setStealMode("Priority")
-        elseif mode == "Nearest" then
-            setStealMode("Nearest")
-        elseif mode == "Highest" then
-            setStealMode("Highest")
-        end
-        saveConfig()
-        _AidenRefreshTarget(true)
-        if ShowNotification then
-            pcall(ShowNotification, "QUICK TP", label or mode)
-        end
-    end
-
-    makeMainButton(quickBody, "Manual TP", function()
-        -- Same TP engine as the keyboard Manual TP action.
-        task.spawn(function()
-            pcall(function()
-                _AidenRefreshTarget(true)
-                if _G.SXECicloTP then
-                    _G.SXECicloTP(0.75)
-                elseif _G.SXE_ExecuteManualTP then
-                    _G.SXE_ExecuteManualTP()
-                elseif _G.SXEStartSideTP then
-                    _G.SXEStartSideTP()
-                else
-                    runAutoSnipe()
-                end
-            end)
-        end)
-    end, Theme.Accent)
-
-    makeMainButton(quickBody, "TP Mode: Priority", function()
-        aidenMode("Priority", "Priority")
-    end)
-
-    makeMainButton(quickBody, "TP Mode: Nearest", function()
-        aidenMode("Nearest", "Nearest")
-    end)
-
-    makeMainButton(quickBody, "TP Mode: Most Gen", function()
-        aidenMode("Highest", "Most Gen")
-    end)
-
-    makeMainButton(quickBody, "Insta Reset", function()
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp and Config.AidenInstaReset ~= false then
-            -- User-supplied reset logic: no extra GUI is created.
-            hrp.AssemblyLinearVelocity = Vector3.new(
-                hrp.AssemblyLinearVelocity.X,
-                10000000,
-                hrp.AssemblyLinearVelocity.Z
-            )
-        end
-    end, Theme.Red)
-
-    pcall(function()
-        applySavedPosition("Aiden Hub V2\nQuick Panel", quickPanel)
-    end)
-
-    if _G.addLazyUI then
-        -- Quick Panel is intentionally available immediately for mobile.
-        _G.addLazyUI(quickPanel, true)
-    end
-end
-for _,pair in ipairs({{"Aiden Hub V2 PAID",main},{"Aiden Hub V2\nInvisible Steal",panels["Invisible Steal Panel"]},
-    {"Aiden Hub V2\nAdmin Command Panel",panels["Admin Command Panel"]},{"Aiden Hub V2\nCommand Cooldowns",panels["Command Cooldowns"]},
-    {"Aiden Hub V2\nActions",panels["Actions"]},{"Aiden Hub V2\nSteal Panel",panels["Steal Panel"]},{"Aiden Hub V2\nSteal Target",panels["Steal Target"]},
-    {"Aiden Hub V2\nAction Settings",actionSettingsPanel},{"Aiden Hub V2\nTP & Clone Settings",tpSpeedSettingsPanel}}) do applySavedPosition(pair[1],pair[2]) end
+for _,pair in ipairs({{"BIL HUB PRIVATE PAID",main},{"BIL HUB PRIVATE\nInvisible Steal",panels["Invisible Steal Panel"]},
+    {"BIL HUB PRIVATE\nAdmin Command Panel",panels["Admin Command Panel"]},{"BIL HUB PRIVATE\nCommand Cooldowns",panels["Command Cooldowns"]},
+    {"BIL HUB PRIVATE\nActions",panels["Actions"]},{"BIL HUB PRIVATE\nSteal Panel",panels["Steal Panel"]},{"BIL HUB PRIVATE\nSteal Target",panels["Steal Target"]},
+    {"BIL HUB PRIVATE\nAction Settings",actionSettingsPanel},{"BIL HUB PRIVATE\nTP & Clone Settings",tpSpeedSettingsPanel}}) do applySavedPosition(pair[1],pair[2]) end
 if _G.addLazyUI then
     _G.addLazyUI(main, not Config.AutoCloseOnExec)
     _G.addLazyUI(actionSettingsPanel, false)
@@ -8980,8 +8862,13 @@ function refreshTargetPanel()
         corner(row, 6)
         if isSelected or isManual then
             local str = Instance.new("UIStroke", row)
-            str.Color = isManual and Color3.fromRGB(56, 214, 110) or Theme.Accent
+            str.Color = isManual and Color3.fromRGB(56, 214, 110) or Color3.fromRGB(255, 255, 255)
             str.Thickness = isManual and 1.75 or 1.25
+            local strGlow = Instance.new("UIStroke", row)
+            strGlow.Color = Color3.fromRGB(255, 255, 255)
+            strGlow.Thickness = isManual and 3.5 or 3
+            strGlow.Transparency = 0.72
+            strGlow.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
         elseif isPriority then
             local str = Instance.new("UIStroke", row)
             str.Color = Color3.fromRGB(255, 90, 120)
@@ -9076,7 +8963,7 @@ LazyInit("Admin Panel UI", function()
     apGui=Instance.new("ScreenGui"); apGui.Name="XiAdminPanel"; apGui.ResetOnSpawn=false; apGui.IgnoreGuiInset=true; apGui.DisplayOrder=9999998; apGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; apGui.Parent=((gethui and gethui()) or game:GetService("CoreGui"))
     apGui.Enabled = (Config.AdminPanelUI == true)
     apOuter=Instance.new("Frame"); apOuter.Name="Frame"; apOuter.BackgroundTransparency=1; apOuter.BorderSizePixel=0; apOuter.Size=UDim2.fromOffset(480,0); apOuter.AutomaticSize=Enum.AutomaticSize.Y; apOuter.Position=UDim2.new(0.18,0,0.57,0); apOuter.ZIndex=10; apOuter.ClipsDescendants=true; apOuter.Parent=registerScreenGui(apGui)
-    apBG=Instance.new("Frame"); apBG.BackgroundColor3=Theme.Background; apBG.BackgroundTransparency=0.50; apBG.BorderSizePixel=0; apBG.Position=UDim2.fromOffset(-3,-2); apBG.Size=UDim2.new(1,6,1,4); apBG.ZIndex=0; apBG.Parent=apOuter; corner(apBG,8)
+    apBG=Instance.new("Frame"); apBG.BackgroundColor3=Color3.fromRGB(8,10,14); apBG.BackgroundTransparency=0.56; apBG.BorderSizePixel=0; apBG.Position=UDim2.fromOffset(-3,-2); apBG.Size=UDim2.new(1,6,1,4); apBG.ZIndex=0; apBG.Parent=apOuter; corner(apBG,8)
     apTop=Instance.new("Frame"); apTop.BackgroundTransparency=1; apTop.BorderSizePixel=0; apTop.Size=UDim2.new(1,0,0,16); apTop.Parent=apOuter; corner(apTop,3)
     makeDraggable(apOuter,apTop,"AdminPanel"); applySavedPosition("AdminPanel",apOuter);
     apList=Instance.new("Frame"); apList.BackgroundTransparency=1; apList.BorderSizePixel=0; apList.Position=UDim2.new(0,0,0,20); apList.Size=UDim2.new(1,0,0,0); apList.AutomaticSize=Enum.AutomaticSize.Y; apList.Parent=apOuter; corner(apList,3)
@@ -9367,7 +9254,7 @@ function makePriorityAddRow()
     local addBtn=Instance.new("TextButton"); addBtn.Name="WhiteTextBtn"; addBtn.Size=UDim2.new(0,44,0,25); addBtn.Position=UDim2.new(1,-50,0.5,-12.5); addBtn.BackgroundColor3=Theme.Accent; addBtn.Text="ADD"; addBtn.TextColor3=Color3.new(1,1,1); addBtn.Font=Enum.Font.GothamBlack; addBtn.TextSize=10; addBtn.AutoButtonColor=false; addBtn.Parent=holder; addBtn.ZIndex=21; corner(addBtn,5)
     local dropdown = Instance.new("Frame"); dropdown.Name="PriorityDropdown"; dropdown.Size=UDim2.new(1,-60,0,0); dropdown.Position=UDim2.new(0,6,1,2)
     dropdown.BackgroundColor3=Theme.Background; dropdown.BorderSizePixel=0; dropdown.ClipsDescendants=true; dropdown.Visible=false; dropdown.ZIndex=50; dropdown.Parent=holder; corner(dropdown,6)
-    local ddStroke = Instance.new("UIStroke"); ddStroke.Color=Theme.AccentLight; ddStroke.Thickness=1; ddStroke.Parent=dropdown
+    local ddStroke = Instance.new("UIStroke"); ddStroke.Color=Color3.fromRGB(255,255,255); ddStroke.Thickness=1.5; ddStroke.Transparency=0.2; ddStroke.Parent=dropdown
     local ddScroll = Instance.new("ScrollingFrame"); ddScroll.Size=UDim2.new(1,0,1,0); ddScroll.BackgroundTransparency=1; ddScroll.BorderSizePixel=0; ddScroll.ScrollBarThickness=3; ddScroll.ScrollBarImageColor3=Theme.Accent; ddScroll.CanvasSize=UDim2.new(0,0,0,0); ddScroll.Active=true; ddScroll.ZIndex=51; ddScroll.Parent=dropdown
     local ddLayout = Instance.new("UIListLayout"); ddLayout.Padding=UDim.new(0,1); ddLayout.Parent=ddScroll
     ddLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function() ddScroll.CanvasSize=UDim2.new(0,0,0,ddLayout.AbsoluteContentSize.Y) end)
@@ -9593,7 +9480,6 @@ function loadTab(tabName)
             panels["Admin Command Panel"].Position=UDim2.new(0.5,85,1,-340); panels["Command Cooldowns"].Position=UDim2.new(0.5,245,1,-390)
             panels["Actions"].Position=UDim2.new(0.5,505,1,-415); panels["Steal Panel"].Position=UDim2.new(1,-300,1,-385)
             panels["Steal Target"].Position=UDim2.new(1,-290,0,85); actionSettingsPanel.Position=UDim2.new(0.5,745,1,-400)
-            if panels["Quick Panel"] then panels["Quick Panel"].Position=UDim2.new(1,-230,1,-300) end
             bottomBar.Position=UDim2.new(0.5,-287,1,-125); Config.positions={}; saveConfig()
         end)
         local lockBtn; lockBtn=makeMainButton(mainBody,UI.Locked and "Locked" or "Unlocked",function() UI.Locked=not UI.Locked; Config.locked=UI.Locked; saveConfig(); lockBtn.Text=UI.Locked and "Locked" or "Unlocked" end,Theme.SoftButton)
@@ -9971,30 +9857,30 @@ if Config.TpSettings.TpOnLoad then task.spawn(function()
     if hrp then pcall(function() hrp.Anchored = false end) end
     do
         local _tp0 = os.clock()
-        local targetReady = false
-        while os.clock() - _tp0 < 12 do
-            local ok, target = pcall(function()
-                return _AidenRefreshTarget(true)
-            end)
-            if ok and target then
-                targetReady = true
-                break
+        local function temAlvo()
+            local c = SharedState and SharedState.AllAnimalsCache
+            if not c then return false end
+            local meu, meuD = LocalPlayer.Name, LocalPlayer.DisplayName
+            for _, a in ipairs(c) do
+                if a.plot and a.slot and a.owner ~= meu and a.owner ~= meuD then
+                    return true
+                end
             end
+            return false
+        end
+        while not temAlvo() and os.clock() - _tp0 < 20 do
             RunService.Heartbeat:Wait()
         end
         if _G.__LMARK then
-            _G.__LMARK(("Aiden fast target in %.2fs: %s")
-                :format(os.clock() - _tp0, tostring(targetReady)))
+            _G.__LMARK(("alvo pronto em %.1fs: %s")
+                :format(os.clock() - _tp0, tostring(temAlvo())))
         end
     end
-    if not _G.AidenFastBootTPStarted then
-        _G.AidenFastBootTPStarted = true
-        if _G.__LMARK then _G.__LMARK("TP-on-load: iniciando ciclo") end
-        if _G.SXECicloTP then
-            _G.SXECicloTP(25)
-        elseif _G.SXEStartSideTP then
-            _G.SXEStartSideTP()
-        end
+    if _G.__LMARK then _G.__LMARK("TP-on-load: iniciando ciclo") end
+    if _G.SXECicloTP then
+        _G.SXECicloTP(25)
+    elseif _G.SXEStartSideTP then
+        _G.SXEStartSideTP()
     end
 end) end
 task.spawn(function()
@@ -11661,36 +11547,6 @@ local function carpetEngage()
     doGrabbleVelocityTP = doVelocityTP
     _G.SXEStartSideTP = doVelocityTP
     if _G.__LMARK then _G.__LMARK("engine ready (TP fn defined)") end
-
-    -- Aiden fast boot: pre-select a target as soon as the shared cache has data,
-    -- without changing movement/TP speed.
-    if Config.AidenFastBoot ~= false then
-        task.spawn(function()
-            local deadline = os.clock() + 12
-            local started = false
-            while os.clock() < deadline and not started do
-                local ok = pcall(function()
-                    local target = _AidenRefreshTarget(true)
-                    if target and not _G.AidenFastBootTPStarted then
-                        started = true
-                        _G.AidenFastBootTPStarted = true
-                        -- Start the existing route immediately; speed values are untouched.
-                        if Config.TpSettings and Config.TpSettings.GrabbleTP and _G.SXEStartSideTP then
-                            task.spawn(_G.SXEStartSideTP)
-                        else
-                            task.spawn(runAutoSnipe)
-                        end
-                    elseif _G.AidenFastBootTPStarted then
-                        started = true
-                    end
-                end)
-                if not started then
-                    RunService.Heartbeat:Wait()
-                end
-            end
-        end)
-    end
-
     _G.SXE_ExecuteManualTP = function()
         task.spawn(function() pcall(doVelocityTP) end)
     end
