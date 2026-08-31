@@ -137,7 +137,7 @@ getconnections = getconnections or get_signal_cons or getconnects
 
 
 -- ============================================================
--- K7 HUB LOGO (rbxassetid only Ã¢â‚¬â€ no embedded image)
+-- K7 HUB LOGO (rbxassetid only ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no embedded image)
 -- ============================================================
 local K7_LOGO_RBX = "rbxassetid://135382218880707"
 local _k7LogoAsset = K7_LOGO_RBX
@@ -826,6 +826,92 @@ medusaCounterEnabled,batCounterEnabled,unwalkEnabled=false,false,false
 medusaDebounce,medusaLastUsed,dropActive=false,0,false
 autoLeftEnabled,autoRightEnabled=false,false
 autoLeftSetVisual,autoRightSetVisual=nil,nil
+
+-- ============================================================
+-- AUTO TP LEFT / RIGHT - RAGDOLL TP
+-- Logic only; uses the existing K7 mobile-button GUI.
+-- The detector is always running; buttons only select the side.
+-- ============================================================
+local autoTpLeft=false
+local autoTpRight=false
+local autoTpTeleporting=false
+local autoTpRecovered=true
+local autoTpConn=nil
+
+local AUTO_TP_FINAL_LEFT=Vector3.new(-483.59,-5.04,104.24)
+local AUTO_TP_FINAL_RIGHT=Vector3.new(-483.51,-5.10,18.89)
+local AUTO_TP_CHECKPOINT_A=Vector3.new(-472.60,-7.00,57.52)
+local AUTO_TP_CHECKPOINT_LEFT=Vector3.new(-472.65,-7.00,95.69)
+local AUTO_TP_CHECKPOINT_RIGHT=Vector3.new(-471.76,-7.00,26.22)
+
+local function autoTpMove(pos)
+    local char=LP.Character
+    if not char then return end
+    pcall(function()
+        char:PivotTo(CFrame.new(pos))
+        local hrp=char:FindFirstChild("HumanoidRootPart")
+        if hrp then hrp.AssemblyLinearVelocity=Vector3.zero end
+    end)
+end
+
+local function executeAutoTp(side)
+    if autoTpTeleporting then return end
+    autoTpTeleporting=true
+    autoTpRecovered=false
+
+    local checkpointB=(side=="Left") and AUTO_TP_CHECKPOINT_LEFT or AUTO_TP_CHECKPOINT_RIGHT
+    local finalPos=(side=="Left") and AUTO_TP_FINAL_LEFT or AUTO_TP_FINAL_RIGHT
+
+    autoTpMove(AUTO_TP_CHECKPOINT_A)
+    task.wait(0.12)
+    autoTpMove(checkpointB)
+    task.wait(0.12)
+    autoTpMove(finalPos)
+
+    autoTpTeleporting=false
+end
+
+local function startAutoTpDetector()
+    if autoTpConn then
+        autoTpConn:Disconnect()
+        autoTpConn=nil
+    end
+
+    autoTpConn=RunService.Heartbeat:Connect(function()
+        local char=LP.Character
+        local hum=char and char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+
+        local state=hum:GetState()
+        local isRagdoll=(state==Enum.HumanoidStateType.Physics
+            or state==Enum.HumanoidStateType.Ragdoll
+            or state==Enum.HumanoidStateType.FallingDown)
+
+        if not isRagdoll then
+            autoTpRecovered=true
+        end
+
+        if not autoTpTeleporting and autoTpRecovered and isRagdoll then
+            if autoTpLeft then
+                task.spawn(executeAutoTp,"Left")
+            elseif autoTpRight then
+                task.spawn(executeAutoTp,"Right")
+            end
+        end
+    end)
+end
+
+local function selectAutoTpLeft()
+    autoTpLeft=true
+    autoTpRight=false
+end
+
+local function selectAutoTpRight()
+    autoTpRight=true
+    autoTpLeft=false
+end
+
+startAutoTpDetector()
 speedLabel=nil
 autoBatEnabled=false
 batAimbotEnabled=false
@@ -3281,6 +3367,12 @@ RunService.Heartbeat:Connect(function(dt)
 end)
 
 LP.CharacterAdded:Connect(function(char)
+    autoTpLeft=false
+    autoTpRight=false
+    autoTpTeleporting=false
+    autoTpRecovered=true
+    if mobBtnRefs.autoTpLeft then mobBtnRefs.autoTpLeft(false) end
+    if mobBtnRefs.autoTpRight then mobBtnRefs.autoTpRight(false) end
     task.wait(0.5);setupSpeedIndicator(char);setupRagdollTriggers()
     if medusaCounterEnabled then setupMedusa(char) end
     if batCounterEnabled then startBatCounter() end
@@ -4922,7 +5014,7 @@ end)
 local _noPlayerColConn = nil
 local _noPlayerColHB = nil
 local function applyNoPlayerCollision()
-    -- NEVER change local character CollisionGroup Ã¢â‚¬â€ that can break floor collision.
+    -- NEVER change local character CollisionGroup ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that can break floor collision.
     -- Only disable collision on OTHER players' parts locally.
     pcall(function()
         local function stripOther(char)
@@ -5145,7 +5237,7 @@ task.spawn(function()
 end)
 
 local function applyK7Fingerprint()
-    -- Local-only fingerprint (no character StringValues/Billboards Ã¢â‚¬â€ those replicate and can trigger PC anti-cheat)
+    -- Local-only fingerprint (no character StringValues/Billboards ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â those replicate and can trigger PC anti-cheat)
     pcall(function()
         LP.CameraMaxZoomDistance = K7_ZOOM_MAX
         LP.CameraMinZoomDistance = K7_ZOOM_MIN
@@ -5914,8 +6006,10 @@ local function buildMobileButtons()
     local buttons={
         {key="drop",        label="DROP\nBR",       toggle=false, exclusive=false},
         {key="autoLeft",    label="AUTO\nLEFT",     toggle=true,  exclusive=true},
+        {key="autoTpLeft",  label="AUTO TP\nLEFT",  toggle=false, exclusive=true},
         {key="autoBat",     label="BAT\nAIMBOT",    toggle=true,  exclusive=true},
         {key="autoRight",   label="AUTO\nRIGHT",    toggle=true,  exclusive=true},
+        {key="autoTpRight", label="AUTO TP\nRIGHT", toggle=false, exclusive=true},
         {key="tpDown",      label="TP\nDOWN",       toggle=false, exclusive=false},
         {key="carrySpeed",  label="CARRY\nSPD",     toggle=true,  exclusive=false},
         {key="lagger",      label="LAGGER\nMODE",   toggle=true,  exclusive=false},
@@ -6105,6 +6199,21 @@ local function buildMobileButtons()
             if def.key=="tpDown" then runTPFloor();flash();return end
             if def.key=="drop" then local d=armDrop();runDrop(d);flash();return end
 
+            -- Auto TP buttons are selectors, not on/off toggles.
+            -- The detector itself stays active for the whole session.
+            if def.key=="autoTpLeft" then
+                selectAutoTpLeft()
+                if mobBtnRefs.autoTpLeft then mobBtnRefs.autoTpLeft(true) end
+                if mobBtnRefs.autoTpRight then mobBtnRefs.autoTpRight(false) end
+                return
+            end
+            if def.key=="autoTpRight" then
+                selectAutoTpRight()
+                if mobBtnRefs.autoTpRight then mobBtnRefs.autoTpRight(true) end
+                if mobBtnRefs.autoTpLeft then mobBtnRefs.autoTpLeft(false) end
+                return
+            end
+
             if def.exclusive then
                 local alreadyOn=(def.key=="autoLeft" and autoLeftEnabled) or (def.key=="autoRight" and autoRightEnabled) or (def.key=="autoBat" and autoBatEnabled) 
                 if alreadyOn then
@@ -6152,6 +6261,8 @@ local function buildMobileButtons()
     if mobBtnRefs.autoLeft then mobBtnRefs.autoLeft(autoLeftEnabled) end
     if mobBtnRefs.autoRight then mobBtnRefs.autoRight(autoRightEnabled) end
     if mobBtnRefs.autoBat then mobBtnRefs.autoBat(autoBatEnabled) end
+    if mobBtnRefs.autoTpLeft then mobBtnRefs.autoTpLeft(autoTpLeft) end
+    if mobBtnRefs.autoTpRight then mobBtnRefs.autoTpRight(autoTpRight) end
     if mobBtnRefs.tpBat then mobBtnRefs.tpBat(tpBatEnabled) end
     if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
     if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
