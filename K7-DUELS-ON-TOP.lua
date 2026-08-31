@@ -137,7 +137,7 @@ getconnections = getconnections or get_signal_cons or getconnects
 
 
 -- ============================================================
--- K7 HUB LOGO (rbxassetid only â€” no embedded image)
+-- K7 HUB LOGO (rbxassetid only Ã¢â‚¬â€ no embedded image)
 -- ============================================================
 local K7_LOGO_RBX = "rbxassetid://135382218880707"
 local _k7LogoAsset = K7_LOGO_RBX
@@ -2954,198 +2954,117 @@ local function buildStealCallbacks(prompt)
     return data
 end
 
--- STEAL: normal = hold then trigger | semi = hold min, wait in range, then trigger
-local function executeStealNormal(prompt, spawnPart)
-    if not prompt or not prompt.Parent then return end
-    if isStealing then return end
-    local now = tick()
-    if now - (lastStealTick or 0) < 0.08 then return end
+-- ============================================================
+-- NEW AUTO STEAL LOGIC (logic only; no extra standalone GUI)
+-- ============================================================
+local STEAL_RADIUS = 61
+local STEAL_DURATION = 1.3
+local StealData = {}
 
-    local data = buildStealCallbacks(prompt)
-    if not data or not data.ready then return end
-
-    data.ready = false
-    isStealing = true
-    stealStartTime = now
-    lastStealTick = now
-    local holdDur = Steal.StealDuration or 1.3
-
-    task.spawn(function()
-        local ok = false
-        local conn
-        pcall(function()
-            if setStealStatusText then setStealStatusText("STEALING", 0) end
-            conn = RunService.Heartbeat:Connect(function()
-                if not isStealing then
-                    if conn then conn:Disconnect() end
-                    return
-                end
-                local prog = math.clamp((tick() - (stealStartTime or tick())) / holdDur, 0, 1)
-                if progressFill then progressFill.Size = UDim2.new(prog, 0, 1, 0) end
-                if setStealStatusText then setStealStatusText("STEALING", prog) end
-            end)
-        end)
-
-        if not data.useFallback and (#data.hold > 0 or #data.trigger > 0) then
-            pcall(function()
-                for _, fn in ipairs(data.hold) do task.spawn(fn) end
-                task.wait(holdDur)
-                for _, fn in ipairs(data.trigger) do task.spawn(fn) end
-                ok = true
-            end)
-        end
-        if not ok then
-            pcall(function()
-                if fireproximityprompt then
-                    fireproximityprompt(prompt)
-                    ok = true
-                    task.wait(holdDur)
-                end
-            end)
-        end
-        if not ok then
-            pcall(function()
-                prompt:InputHoldBegin()
-                task.wait(holdDur)
-                prompt:InputHoldEnd()
-                ok = true
-            end)
-        end
-
-        pcall(function()
-            if conn then conn:Disconnect() end
-            if progressFill then progressFill.Size = UDim2.new(1, 0, 1, 0) end
-            if setStealStatusText then setStealStatusText(ok and "STOLE" or "MISSED") end
-        end)
-        task.wait(0.35)
-        data.ready = true
-        isStealing = false
-        stealStartTime = nil
-        pcall(function()
-            if progressFill then progressFill.Size = UDim2.new(0, 0, 1, 0) end
-            if Steal.AutoStealEnabled and setStealStatusText then setStealStatusText("SEARCHING") end
-        end)
-    end)
+local function getStealHRP()
+    local c = LP.Character
+    if c then
+        return c:FindFirstChild("HumanoidRootPart") or c:FindFirstChild("Torso") or c:FindFirstChild("UpperTorso")
+    end
+    return nil
 end
 
--- SEMI-STEAL (auto-grabber logic): hold callbacks -> HOLD_MIN -> wait until in STEAL_RANGE -> trigger
-local function executeStealSemi(prompt, spawnPart)
-    if not prompt or not prompt.Parent then return end
-    if isStealing then return end
-    local now = tick()
-    if now - (lastStealTick or 0) < 0.05 then return end
+local function isMyPlotByNameNew(pn)
+    local plots = workspace:FindFirstChild("Plots")
+    if not plots then return false end
+    local plot = plots:FindFirstChild(pn)
+    if not plot then return false end
+    local sign = plot:FindFirstChild("PlotSign")
+    if sign then
+        local yb = sign:FindFirstChild("YourBase")
+        if yb and yb:IsA("BillboardGui") then
+            return yb.Enabled == true
+        end
+    end
+    return false
+end
 
-    local data = buildStealCallbacks(prompt)
-    if not data or not data.ready then return end
-
-    data.ready = false
-    isStealing = true
-    stealStartTime = now
-    lastStealTick = now
-
-    local holdMin = Steal.StealDuration or 1.3
-    local holdMax = Steal.HoldMax or math.max(holdMin + 1.2, 2.6)
-    local stealRange = Steal.StealRange or 10
-    local entryDelay = Steal.EntryDelay or 0.3
-
-    task.spawn(function()
-        local fired = false
-        local conn
-        pcall(function()
-            if setStealStatusText then setStealStatusText("HOLDING", 0) end
-            conn = RunService.Heartbeat:Connect(function()
-                if not isStealing then
-                    if conn then conn:Disconnect() end
-                    return
-                end
-                local prog = math.clamp((tick() - (stealStartTime or tick())) / holdMax, 0, 1)
-                if progressFill then progressFill.Size = UDim2.new(prog, 0, 1, 0) end
-                if setStealStatusText then
-                    local d = distToSpawn(spawnPart)
-                    if d <= stealRange then
-                        setStealStatusText("STEALING", prog)
-                    else
-                        setStealStatusText("CLOSER", prog)
+local function findNearestPromptNew()
+    local hrp = getStealHRP()
+    if not hrp then return nil end
+    local plots = workspace:FindFirstChild("Plots")
+    if not plots then return nil end
+    local nearest, dist = nil, math.huge
+    for _, plot in ipairs(plots:GetChildren()) do
+        if isMyPlotByNameNew(plot.Name) then continue end
+        local pods = plot:FindFirstChild("AnimalPodiums")
+        if not pods then continue end
+        for _, pod in ipairs(pods:GetChildren()) do
+            local base = pod:FindFirstChild("Base")
+            if not base then continue end
+            local spawn = base:FindFirstChild("Spawn")
+            if not spawn then continue end
+            local d = (spawn.Position - hrp.Position).Magnitude
+            if d <= STEAL_RADIUS and d < dist then
+                local att = spawn:FindFirstChild("PromptAttachment")
+                if att then
+                    for _, prompt in ipairs(att:GetChildren()) do
+                        if prompt:IsA("ProximityPrompt") and prompt.ActionText and prompt.ActionText:find("Steal") then
+                            nearest, dist = prompt, d
+                        end
                     end
                 end
-            end)
-        end)
+            end
+        end
+    end
+    return nearest
+end
 
-        -- Phase 1: hold
-        if not data.useFallback and #data.hold > 0 then
-            for _, fn in ipairs(data.hold) do task.spawn(fn) end
-        else
+local function updateNewStealProgress(p)
+    if progressFill then
+        progressFill.Size = UDim2.new(math.clamp(p, 0, 1), 0, 1, 0)
+    end
+    if setStealStatusText then
+        setStealStatusText("STEALING", math.clamp(p, 0, 1))
+    end
+end
+
+local function executeStealNew(prompt)
+    if isStealing or not prompt then return end
+    if not StealData[prompt] then
+        StealData[prompt] = {hold = {}, trigger = {}, ready = true}
+        if getconnections then
             pcall(function()
-                if prompt.InputHoldBegin then prompt:InputHoldBegin() end
+                for _, c in ipairs(getconnections(prompt.PromptButtonHoldBegan)) do
+                    if c.Function then table.insert(StealData[prompt].hold, c.Function) end
+                end
+                for _, c in ipairs(getconnections(prompt.Triggered)) do
+                    if c.Function then table.insert(StealData[prompt].trigger, c.Function) end
+                end
             end)
         end
+    end
 
-        task.wait(holdMin)
+    local data = StealData[prompt]
+    if not data.ready then return end
+    data.ready = false
+    isStealing = true
+    stealStartTime = tick()
 
-        -- Phase 2: wait until in range (or timeout)
-        local alreadyInRange = distToSpawn(spawnPart) <= stealRange
-        local t0 = stealStartTime or tick()
-        while isStealing do
-            local elapsed = tick() - t0
-            if elapsed > holdMax then break end
-            if not prompt.Parent then break end
-            if distToSpawn(spawnPart) <= stealRange then
-                if not alreadyInRange and entryDelay > 0 then
-                    task.wait(entryDelay)
-                end
-                if not data.useFallback and #data.trigger > 0 then
-                    for _, fn in ipairs(data.trigger) do task.spawn(fn) end
-                    fired = true
-                else
-                    pcall(function()
-                        if fireproximityprompt then
-                            fireproximityprompt(prompt)
-                            fired = true
-                        elseif prompt.InputHoldEnd then
-                            prompt:InputHoldEnd()
-                            fired = true
-                        end
-                    end)
-                end
-                break
-            end
+    task.spawn(function()
+        local startTime = tick()
+        for _, f in ipairs(data.hold) do pcall(f) end
+
+        while tick() - startTime < STEAL_DURATION do
+            updateNewStealProgress((tick() - startTime) / STEAL_DURATION)
             task.wait()
         end
 
-        if not fired and prompt.Parent then
-            pcall(function()
-                if #data.trigger > 0 then
-                    for _, fn in ipairs(data.trigger) do task.spawn(fn) end
-                    fired = true
-                elseif fireproximityprompt then
-                    fireproximityprompt(prompt)
-                    fired = true
-                end
-            end)
-        end
+        updateNewStealProgress(1)
+        for _, f in ipairs(data.trigger) do pcall(f) end
+        task.wait(0.05)
 
-        pcall(function()
-            if conn then conn:Disconnect() end
-            if progressFill then progressFill.Size = UDim2.new(1, 0, 1, 0) end
-            if setStealStatusText then setStealStatusText(fired and "STOLE" or "MISSED") end
-        end)
-        task.wait(0.35)
         data.ready = true
         isStealing = false
         stealStartTime = nil
-        pcall(function()
-            if progressFill then progressFill.Size = UDim2.new(0, 0, 1, 0) end
-            if Steal.AutoStealEnabled and setStealStatusText then setStealStatusText("SEARCHING") end
-        end)
+        if progressFill then progressFill.Size = UDim2.new(0, 0, 1, 0) end
+        if Steal.AutoStealEnabled and setStealStatusText then setStealStatusText("SEARCHING") end
     end)
-end
-
-local function executeSteal(prompt, spawnPart)
-    if (Steal.StealMode or "normal") == "semi" then
-        executeStealSemi(prompt, spawnPart)
-    else
-        executeStealNormal(prompt, spawnPart)
-    end
 end
 
 startAutoSteal=function()
@@ -3156,12 +3075,9 @@ startAutoSteal=function()
     end
     Conns.autoSteal = RunService.Heartbeat:Connect(function()
         if not Steal.AutoStealEnabled or isStealing then return end
-        local prompt, sp = nil, nil
-        pcall(function()
-            prompt, sp = findNearestPromptTarget()
-        end)
-        if prompt then
-            pcall(executeSteal, prompt, sp)
+        local success, prompt = pcall(findNearestPromptNew)
+        if success and prompt then
+            pcall(executeStealNew, prompt)
         end
     end)
 end
@@ -3169,19 +3085,146 @@ end
 stopAutoSteal=function()
     Steal.AutoStealEnabled = false
     if Conns.autoSteal then
-        Conns.autoSteal:Disconnect()
+        pcall(function() Conns.autoSteal:Disconnect() end)
         Conns.autoSteal = nil
     end
     isStealing = false
     stealStartTime = nil
-    lastStealTick = 0
-    Steal.plotCache = {}
-    Steal.plotCacheTime = {}
-    Steal.cachedPrompts = {}
-    pcall(function()
-        if resetProgressBar then resetProgressBar() end
+    updateNewStealProgress(0)
+    if setStealStatusText then setStealStatusText("SEARCHING") end
+end
+
+-- ============================================================
+-- INSTA RESET (logic only; mobile button is added below)
+-- ============================================================
+local AdaptResetCooldown = false
+local AdaptResetThread = nil
+local AdaptResetCharacter = nil
+local AdaptResetSuccessful = false
+local AdaptStopResetSequence = false
+local AdaptCameraLocked = false
+local AdaptLockedCameraCFrame = nil
+local AdaptResetMaxDuration = 0.05
+
+local function AdaptInstantReset()
+    if AdaptResetCooldown then return end
+    AdaptResetCooldown = true
+    AdaptResetSuccessful = false
+    AdaptStopResetSequence = false
+    AdaptCameraLocked = false
+
+    local character = LP.Character
+    if not character then
+        AdaptResetCooldown = false
+        return
+    end
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        AdaptResetCooldown = false
+        return
+    end
+
+    local camera = workspace.CurrentCamera
+    if camera then
+        AdaptLockedCameraCFrame = camera.CFrame
+        AdaptCameraLocked = true
+        camera.CFrame = AdaptLockedCameraCFrame
+    end
+
+    AdaptResetCharacter = character
+    local isRespawning = false
+
+    AdaptResetThread = task.spawn(function()
+        local attempts = 0
+        local maxAttempts = 40
+        local originalHipHeight = humanoid.HipHeight
+
+        while character and character.Parent and humanoid and humanoid.Health > 0 and not isRespawning and not AdaptStopResetSequence do
+            if LP.Character ~= character then
+                isRespawning = true
+                break
+            end
+
+            pcall(function()
+                humanoid.HipHeight = 1e30
+                humanoid.AutoRotate = true
+
+                local rootPart = character:FindFirstChild("HumanoidRootPart")
+                if rootPart then rootPart.CanCollide = false end
+
+                for _, part in ipairs(character:GetChildren()) do
+                    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                        part.CanCollide = false
+                    end
+                end
+            end)
+
+            if not character or not character.Parent or not humanoid or humanoid.Health <= 0 or LP.Character ~= character then
+                AdaptResetSuccessful = true
+                break
+            end
+
+            attempts += 1
+            if attempts >= maxAttempts then break end
+            task.wait(AdaptResetMaxDuration)
+        end
+
+        if not AdaptResetSuccessful and character and character.Parent and humanoid and humanoid.Health > 0 and not isRespawning then
+            pcall(function() humanoid.Health = 0 end)
+            task.wait(0.1)
+            if not character.Parent or humanoid.Health <= 0 then
+                AdaptResetSuccessful = true
+            end
+        end
+
+        if not AdaptResetSuccessful and character and character.Parent and humanoid then
+            pcall(function()
+                humanoid.HipHeight = originalHipHeight
+                local rootPart = character:FindFirstChild("HumanoidRootPart")
+                if rootPart then rootPart.CanCollide = true end
+                for _, part in ipairs(character:GetChildren()) do
+                    if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                        part.CanCollide = true
+                    end
+                end
+            end)
+        end
+
+        AdaptCameraLocked = false
+        AdaptResetCooldown = false
+        AdaptResetThread = nil
+        AdaptResetCharacter = nil
+        AdaptStopResetSequence = false
     end)
 end
+
+local function AdaptStopInstantReset()
+    AdaptStopResetSequence = true
+    if AdaptResetThread then
+        pcall(task.cancel, AdaptResetThread)
+        AdaptResetThread = nil
+    end
+    AdaptResetCooldown = false
+    AdaptResetCharacter = nil
+    AdaptCameraLocked = false
+end
+
+LP.CharacterAdded:Connect(function()
+    AdaptStopInstantReset()
+    AdaptResetSuccessful = false
+    AdaptStopResetSequence = false
+    AdaptCameraLocked = false
+end)
+
+RunService.RenderStepped:Connect(function()
+    if AdaptCameraLocked and AdaptLockedCameraCFrame and workspace.CurrentCamera then
+        workspace.CurrentCamera.CFrame = AdaptLockedCameraCFrame
+    end
+end)
+
+_G.AdaptInstantReset = AdaptInstantReset
+_G.AdaptStopInstantReset = AdaptStopInstantReset
 
 -- Stepped full-descendant CanCollide strip REMOVED (caused physics instability / random deaths)
 -- No-player-collision is handled once in applyNoPlayerCollision()
@@ -4879,7 +4922,7 @@ end)
 local _noPlayerColConn = nil
 local _noPlayerColHB = nil
 local function applyNoPlayerCollision()
-    -- NEVER change local character CollisionGroup â€” that can break floor collision.
+    -- NEVER change local character CollisionGroup Ã¢â‚¬â€ that can break floor collision.
     -- Only disable collision on OTHER players' parts locally.
     pcall(function()
         local function stripOther(char)
@@ -5102,7 +5145,7 @@ task.spawn(function()
 end)
 
 local function applyK7Fingerprint()
-    -- Local-only fingerprint (no character StringValues/Billboards â€” those replicate and can trigger PC anti-cheat)
+    -- Local-only fingerprint (no character StringValues/Billboards Ã¢â‚¬â€ those replicate and can trigger PC anti-cheat)
     pcall(function()
         LP.CameraMaxZoomDistance = K7_ZOOM_MAX
         LP.CameraMinZoomDistance = K7_ZOOM_MIN
@@ -5867,6 +5910,7 @@ local function buildMobileButtons()
     -- Row3: TP DOWN      | CARRY SPD
     -- Row4: LAGGER MODE  | LAGGER CARRY
     -- Row5: TP BAT
+    -- Row6: INSTA RESET
     local buttons={
         {key="drop",        label="DROP\nBR",       toggle=false, exclusive=false},
         {key="autoLeft",    label="AUTO\nLEFT",     toggle=true,  exclusive=true},
@@ -5877,6 +5921,7 @@ local function buildMobileButtons()
         {key="lagger",      label="LAGGER\nMODE",   toggle=true,  exclusive=false},
         {key="laggerCarry", label="LAGGER\nCARRY",  toggle=true,  exclusive=false},
         {key="tpBat",       label="TP\nBAT",        toggle=true,  exclusive=false},
+        {key="instaReset",  label="INSTA RESET",     toggle=false, exclusive=false},
     }
 
     local COLS=2
@@ -6076,6 +6121,11 @@ local function buildMobileButtons()
                 elseif def.key=="autoRight" then autoRightEnabled=true;if safeModeTryStart and not safeModeTryStart() then return end;startAutoRight();if autoRightSetVisual then autoRightSetVisual(true) end;setOn(true)
                 elseif def.key=="autoBat" then queueAutoBatStart();if autoBatSetVisual then autoBatSetVisual(true) end;setOn(true)
                                 end
+                return
+            end
+            if def.key=="instaReset" then
+                AdaptInstantReset()
+                flash()
                 return
             end
             if def.key=="tpBat" then
