@@ -1,3 +1,4 @@
+-- Aiden Hub V3 optimized build: TP movement speeds intentionally unchanged.
 local print = print
 _G.SXEBuscaGui = function(nome)
     local alvo = (gethui and gethui()) or game:GetService("CoreGui")
@@ -44,6 +45,15 @@ _G.__LT = os.clock()
 _G.__LMARK = function(name) print(("[LOAD] %-22s %6.2fs"):format(name, os.clock() - _G.__LT)) end
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
+
+-- Aiden Hub V3 device profile: mobile-first, without changing TP/carpet/grapple speed.
+local AidenDevice = {
+    Mobile = UIS and UIS.TouchEnabled and not UIS.KeyboardEnabled or false,
+    PC = UIS and UIS.KeyboardEnabled or false,
+}
+_G.AidenDeviceProfile = AidenDevice
+_G.AidenStartupReady = false
+_G.AidenPreloadRunning = false
 UIS = game:GetService("UserInputService")
 RunService = game:GetService("RunService")
 Stats = game:GetService("Stats")
@@ -86,7 +96,8 @@ do
             for _, obj in ipairs(Workspace:GetDescendants()) do
                 optimize(obj)
                 processed += 1
-                if processed % 250 == 0 then
+                if processed % (AidenDevice.Mobile and 100 or 250) == 0 then
+                    task.defer(function() end)
                     task.wait()
                 end
             end
@@ -1657,7 +1668,7 @@ Config = {
     WalkSpeedEnabled=false, WalkSpeedValue=16,
     AutoTPPriority=true, AutoTPHighestGen=false, AutoTPHighestValue=false, AutoTPFloor2FromFloor1=false, FPSBoost=false, FPSBoostUltra=false, XRay=false, FOV=70,
     BrainrotESP=true, TimerESP=false, SubspaceMineESP=false, PlayerESP=true, BaseOwnerESP=false,
-    AutoBuyEnabled=false, AutoBuyRange=17, AutoGrabSpeed=17, AutoBuyKey="K",
+    AutoBuyEnabled=false, AutoBuyRange=17, AutoGrabSpeed=17, AutoGrabRadius=50, AutoBuyKey="K",
     AutoDestroyTurrets=false, AutoUnlockOnSteal=false,
     AutoInvisDuringSteal=false,
     ClickToAP=false, ClickToAPSingleCommand=false,
@@ -1683,6 +1694,7 @@ Config = {
         ["Steal Panel"] = true,
         ["Steal Target"] = true,
     },
+    -- Aiden Hub V3: TP speed values intentionally unchanged.
     TpSettings = {
         Tool="Flying Carpet", TpKey="T", CloneKey="V", CarpetSpeedKey="Q",
         InfiniteJump=false, DelayVal=0.4, CloneDelayVal=0.1,
@@ -2873,8 +2885,8 @@ end)
 task.spawn(function()
     local wasStealingForInvis = false
     local autoEnabledInvis = false
-    task.wait(1)
-    while task.wait(0.15) do
+    task.wait(0.20)
+    while task.wait(0.10) do
         if Config.AutoInvisDuringSteal == false then
             wasStealingForInvis = false
             autoEnabledInvis = false
@@ -3478,14 +3490,14 @@ currentStealTargetUID = nil
 activeProgressTween = nil
 instantStealReady = false
 instantStealDidInit = false
-INSTANT_STEAL_RADIUS = 60
+INSTANT_STEAL_RADIUS = 50
 INSTANT_STEAL_COOLDOWN = 0
 lastInstantStealTime = 0
 PromptMemoryCache = {}
 InternalStealCacheData = {}
 local CONFIG = {
     AUTO_STEAL = false,
-    RADIUS = 60
+    RADIUS = 50
 }
 local boxes = {
     {min = Vector3.new(-337.448303, -3.898971, -122.397758), max = Vector3.new(-328.004578, -3.898971, 242.625626)},
@@ -3503,6 +3515,8 @@ local trackedPrompts = {}
 local lastFire = {}
 local SAFE_POLL_RATE = 0.05
 local SAFE_POLL_OVERRIDE_UNTIL = 0
+local AUTO_GRAB_RETRY_DELAY = 2.0
+local autoGrabRetryAt = 0
 function _G.getSafePollRate()
     if os.clock() < SAFE_POLL_OVERRIDE_UNTIL then
         return 0.27
@@ -3586,7 +3600,7 @@ local function isPromptAvailable(prompt, hrpPos)
     if not (_G.NEAREST_INSTANT_MODE == true) then
         if not promptMatchesSelectedPet(prompt) then return false end
     end
-    local configuredRadius = Config.AutoGrabRadius or 60
+    local configuredRadius = Config.AutoGrabRadius or 50
     return (pos - hrpPos).Magnitude <= configuredRadius
 end
 local function canFire(prompt, debounce)
@@ -3645,12 +3659,21 @@ task.spawn(function()
             if not hrp then CONFIG.AUTO_STEAL = false; continue end
             local myPos = hrp.Position
             local anyAvailable = false
+
+            -- Range detection remains hot; a target entering the 50-stud radius
+            -- is acted on immediately. The 2s gate only prevents a fresh
+            -- completed/missed cycle from immediately restarting.
             for prompt in pairs(trackedPrompts) do
                 if isPromptAvailable(prompt, myPos) then
                     anyAvailable = true
-                    if CONFIG.AUTO_STEAL then firePrompt(prompt, FIRE_BURST, FIRE_DEBOUNCE) end
+                    if CONFIG.AUTO_STEAL and os.clock() >= autoGrabRetryAt then
+                        firePrompt(prompt, FIRE_BURST, FIRE_DEBOUNCE)
+                        autoGrabRetryAt = os.clock() + AUTO_GRAB_RETRY_DELAY
+                    end
+                    break
                 end
             end
+
             CONFIG.AUTO_STEAL = anyAvailable
         else
             CONFIG.AUTO_STEAL = false
@@ -8667,14 +8690,98 @@ do
         end
     end, Theme.Red)
 
+    -- Background warm-up. This does not pretend Lua can literally preload itself;
+    -- it warms the modules, common containers, target cache and GUI references
+    -- without blocking the first frame.
+    do
+        local preloadButton
+        preloadButton = makeMainButton(quickBody, "Preload All Functions & GUIs", function()
+            if _G.AidenPreloadRunning then return end
+            _G.AidenPreloadRunning = true
+
+            task.spawn(function()
+                local stages = {
+                    function()
+                        pcall(function()
+                            local rs = ReplicatedStorage
+                            local pk = rs:FindFirstChild("Packages")
+                            local ds = rs:FindFirstChild("Datas")
+                            local sh = rs:FindFirstChild("Shared")
+                            local ut = rs:FindFirstChild("Utils")
+                            if pk then require(pk:FindFirstChild("Synchronizer")) end
+                            if ds then require(ds:FindFirstChild("Animals")) end
+                            if ds then require(ds:FindFirstChild("Mutations")) end
+                            if ds then require(ds:FindFirstChild("Traits")) end
+                            if sh then require(sh:FindFirstChild("Animals")) end
+                            if ut then require(ut:FindFirstChild("NumberUtils")) end
+                        end)
+                    end,
+                    function()
+                        pcall(function()
+                            if _G.XenSyncAll then _G.XenSyncAll() end
+                            if _G.SXE_GetAllPlots then _G.SXE_GetAllPlots() end
+                        end)
+                    end,
+                    function()
+                        pcall(function()
+                            local plots = Workspace:FindFirstChild("Plots")
+                            if plots then
+                                for _, plot in ipairs(plots:GetChildren()) do
+                                    plot:GetAttribute("Order")
+                                    plot:FindFirstChild("AnimalPodiums")
+                                end
+                            end
+                        end)
+                    end,
+                    function()
+                        pcall(function()
+                            if scanBrainrotPrompts then scanBrainrotPrompts() end
+                            if _AidenRefreshTarget then _AidenRefreshTarget(true) end
+                        end)
+                    end,
+                    function()
+                        pcall(function()
+                            for _, p in pairs(panels) do
+                                if p and p:IsA("GuiObject") then
+                                    p.AbsoluteSize = p.AbsoluteSize
+                                end
+                            end
+                            if main and main:IsA("GuiObject") then
+                                main.AbsoluteSize = main.AbsoluteSize
+                            end
+                        end)
+                    end,
+                }
+
+                for i, stage in ipairs(stages) do
+                    pcall(stage)
+                    if preloadButton and preloadButton:IsA("TextButton") then
+                        local pct = i * 20
+                        preloadButton.Text = ("Preload: %d%%"):format(pct)
+                    end
+                    task.wait(1)
+                end
+
+                if preloadButton and preloadButton.Parent then
+                    preloadButton.Text = "Preload Complete"
+                end
+                _G.AidenStartupReady = true
+                _G.AidenPreloadRunning = false
+                task.delay(1.5, function()
+                    if preloadButton and preloadButton.Parent then
+                        preloadButton.Text = "Preload All Functions & GUIs"
+                    end
+                end)
+            end)
+        end, Theme.SoftAccent)
+    end
+
     pcall(function()
         applySavedPosition("Aiden Hub V2\nQuick Panel", quickPanel)
     end)
 
-    if _G.addLazyUI then
-        -- Quick Panel is intentionally available immediately for mobile.
-        _G.addLazyUI(quickPanel, true)
-    end
+    -- Quick Panel is a critical mobile control surface: show it immediately.
+    quickPanel.Visible = true
 end
 for _,pair in ipairs({{"Aiden Hub V2 PAID",main},{"Aiden Hub V2\nInvisible Steal",panels["Invisible Steal Panel"]},
     {"Aiden Hub V2\nAdmin Command Panel",panels["Admin Command Panel"]},{"Aiden Hub V2\nCommand Cooldowns",panels["Command Cooldowns"]},
@@ -9964,7 +10071,8 @@ if Config.TpSettings.TpOnLoad then task.spawn(function()
     char:WaitForChild("HumanoidRootPart", 20)
     char:WaitForChild("Humanoid", 20)
     local _t0 = os.clock()
-    while not _G.SXEStartSideTP and os.clock() - _t0 < 10 do
+    while not _G.SXEStartSideTP and not _G.SXE_ExecuteManualTP
+        and os.clock() - _t0 < 5 do
         RunService.Heartbeat:Wait()
     end
     local hrp = char:FindFirstChild("HumanoidRootPart")
@@ -9997,6 +10105,9 @@ if Config.TpSettings.TpOnLoad then task.spawn(function()
         end
     end
 end) end
+_G.AidenOptimizedV3 = true
+_G.AidenOptimizedDevice = (AidenDevice.Mobile and "Mobile" or "PC")
+
 task.spawn(function()
     task.wait(0.1)
     if Config.AntiRagdoll then startAntiRagdoll() end
