@@ -281,6 +281,37 @@ local _riddleSolver = savedConfig.riddleSolver
 local _awaitingCode = false
 local _lastStatusMsg = nil
 
+-- ===== Blacklist for UI labels (common words that are not codes) =====
+local blacklist = {
+    "redeem", "submit", "close", "cancel", "ok", "yes", "no",
+    "shop", "codes", "code", "enter", "type", "here", "click",
+    "copy", "paste", "delete", "back", "next", "done", "exit",
+    "save", "load", "reset", "apply", "confirm", "reject",
+    "accept", "decline", "buy", "sell", "trade", "inventory",
+    "settings", "options", "help", "about", "support", "contact",
+    "name", "level", "rank", "score", "points", "coins", "gems",
+    "cash", "energy", "health", "mana", "xp", "exp",
+}
+
+local function isLikelyCode(text)
+    if not text or text == "" then return false end
+    local trimmed = text:match("^%s*(.-)%s*$")
+    if trimmed == "" then return false end
+    -- Must be a single word (no spaces)
+    if trimmed:find("%s") then return false end
+    -- Must be alphanumeric (allow underscores)
+    if not trimmed:match("^[%w_]+$") then return false end
+    -- Length between 2 and 12 (as requested)
+    local len = #trimmed
+    if len < 2 or len > 12 then return false end
+    -- Not in blacklist (case-insensitive)
+    local lower = trimmed:lower()
+    for _, word in ipairs(blacklist) do
+        if lower == word then return false end
+    end
+    return true
+end
+
 local COLORS = {
     Window = Color3.fromRGB(6, 6, 7),
     Row = Color3.fromRGB(15, 15, 17),
@@ -921,8 +952,8 @@ local function processText(text)
         return
     end
 
-    -- If in capture mode, capture any text (no filter)
-    if _awaitingCode and text ~= "" then
+    -- If in capture mode and text looks like a code, capture it
+    if _awaitingCode and isLikelyCode(text) then
         local codePart = text:upper()
         if not _seen[codePart] then
             _seen[codePart] = true
@@ -956,6 +987,8 @@ local function resolveAceNotifyRemote()
 end
 
 local aceNotifyRemote = resolveAceNotifyRemote()
+local useFallback = false
+
 if aceNotifyRemote then
     aceNotifyRemote.OnClientEvent:Connect(function(...)
         if not _enabled then return end
@@ -967,16 +1000,82 @@ if aceNotifyRemote then
             processText(text)
         end
     end)
+    setStatus("ACE Code Sniper: Remote mode active.", COLORS.Green)
 else
-    setStatus("ACE Notification remote not found. Script may not work.", COLORS.Red)
+    useFallback = true
+    setStatus("ACE Notification remote not found. Using fallback UI scanner.", COLORS.Amber)
+end
+
+-- ===================== FALLBACK UI SCANNER (smarter) =====================
+local fallbackConnections = {}
+local function startFallbackScanner()
+    -- Find the chat container. Common paths: PlayerGui.Chat, PlayerGui.ChatService, PlayerGui.ChatFrame
+    local chatContainer = nil
+    local possibleNames = {"Chat", "ChatService", "ChatFrame", "ChatMessages", "MessageContainer"}
+    for _, name in ipairs(possibleNames) do
+        local found = playerGui:FindFirstChild(name)
+        if found then
+            chatContainer = found
+            break
+        end
+    end
+    if not chatContainer then
+        -- If not found, fallback to scanning all TextLabels but with stricter filter
+        chatContainer = playerGui
+        setStatus("Fallback: Chat container not found, scanning all UI with strict filter.", COLORS.Amber)
+    end
+
+    local function onTextChange(obj)
+        if not _enabled then return end
+        local text = obj.Text
+        if text and text ~= "" then
+            -- Only process if it's a likely code (single word, alphanumeric, len 2-12, not blacklisted)
+            if isLikelyCode(text) then
+                processText(text)
+            end
+        end
+    end
+
+    -- Monitor existing TextLabels in the container
+    for _, obj in ipairs(chatContainer:GetDescendants()) do
+        if obj:IsA("TextLabel") then
+            -- Attach a listener
+            local conn = obj:GetPropertyChangedSignal("Text"):Connect(function()
+                onTextChange(obj)
+            end)
+            table.insert(fallbackConnections, conn)
+            -- Process initial text if any
+            onTextChange(obj)
+        end
+    end
+
+    -- Also listen for new descendants added to the container
+    local addedConn = chatContainer.DescendantAdded:Connect(function(obj)
+        if obj:IsA("TextLabel") then
+            local conn = obj:GetPropertyChangedSignal("Text"):Connect(function()
+                onTextChange(obj)
+            end)
+            table.insert(fallbackConnections, conn)
+            onTextChange(obj)
+        end
+    end)
+    table.insert(fallbackConnections, addedConn)
+end
+
+if useFallback then
+    startFallbackScanner()
 end
 
 -- ===================== INIT =====================
-setStatus("ACE Code Sniper loaded (remote-only mode, no filter). Waiting for triggers...", COLORS.Dim)
+setStatus("ACE Code Sniper loaded. Waiting for triggers...", COLORS.Dim)
 
+-- StopAura cleanup
 getgenv().StopAura = function()
     if GUI then GUI:Destroy() end
+    for _, conn in ipairs(fallbackConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
     getgenv().StopAura = nil
 end
 
-print("[ACE] Code Sniper loaded with remote-only scanning, no filter.")
+print("[ACE] Code Sniper loaded with remote + fallback scanner (smart filter).")
