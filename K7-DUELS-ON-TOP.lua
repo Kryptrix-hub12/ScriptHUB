@@ -821,9 +821,6 @@ laggerModeEnabled = false
 laggerCarryActive = false
 
 antiRagdollEnabled,infJumpEnabled=false,false
-antiDropEnabled=false
-antiDropSpeed=59
-local antiDropSpoofedVelocity=Vector3.zero
 playerEspEnabled,playerTracersEnabled=false,false
 medusaCounterEnabled,batCounterEnabled,unwalkEnabled=false,false,false
 medusaDebounce,medusaLastUsed,dropActive=false,0,false
@@ -952,7 +949,6 @@ end)
 refreshSpeedModeLabel,saveConfig=nil,nil
 startUnwalk,stopUnwalk,setupMedusa,stopMedusaCounter=nil,nil,nil,nil
 startAntiRagdoll,stopAntiRagdoll,startAutoLeft,stopAutoLeft,startAutoRight,stopAutoRight=nil,nil,nil,nil,nil,nil
-setAntiDropVisual=nil
 startAutoTP,stopAutoTP,enableAntiLag,disableAntiLag=nil,nil,nil,nil
 startBatAimbot,stopBatAimbot,queueAutoBatStart,runDrop,runTPFloor,startTPBat,stopTPBat=nil,nil,nil,nil,nil,nil,nil
 startAutoSteal,stopAutoSteal,enableAntiKick,disableAntiKick,toggleCarryMode,toggleLaggerMode,toggleLaggerCarryMode=nil,nil,nil,nil,nil,nil,nil
@@ -2823,87 +2819,10 @@ end
 KB={DropBrainrot={kb=nil,gp=nil},AutoLeft={kb=nil,gp=nil},AutoRight={kb=nil,gp=nil},AutoBat={kb=nil,gp=nil},TPBat={kb=nil,gp=nil},TPFloor={kb=nil,gp=nil},GuiHide={kb=nil,gp=nil},SpeedToggle={kb=nil,gp=nil},LaggerToggle={kb=nil,gp=nil},LaggerCarry={kb=nil,gp=nil},AntiDesync={kb=nil,gp=nil},LaggerPanel={kb=nil,gp=nil}}
 AP_L1,AP_L2=Vector3.new(-476.47,-6.28,92.73),Vector3.new(-483.12,-4.95,94.81)
 AP_R1,AP_R2=Vector3.new(-476.16,-6.52,25.62),Vector3.new(-483.06,-5.03,25.48)
-Steal={AutoStealEnabled=false,StealRadius=69,StealDuration=1.3,StealMode="normal",StealRange=10,EntryDelay=0.3,HoldMax=2.6,Data={},plotCache={},plotCacheTime={},cachedPrompts={},promptCacheTime=0}
+Steal={AutoStealEnabled=false,StealRadius=60,StealDuration=1.3,StealMode="normal",StealRange=10,EntryDelay=0.3,HoldMax=2.6,Data={},plotCache={},plotCacheTime={},cachedPrompts={},promptCacheTime=0}
 lastStealTick=0
 isStealing,stealStartTime=false,nil
 Conns={autoSteal=nil,antiRag=nil,batCounter=nil,anchor={}}
-
--- ============================================================
--- ANTI DROP (logic only)
--- ============================================================
-do
-    local hookMeta = rawget(_G, "hookmetamethod")
-        or (getgenv and getgenv().hookmetamethod)
-
-    if typeof(hookMeta) == "function" then
-        local oldIndex
-        local oldNewIndex
-
-        pcall(function()
-            oldIndex = hookMeta(game, "__index", newcclosure(function(self, key)
-                if not checkcaller()
-                    and antiDropEnabled
-                    and (key == "AssemblyLinearVelocity" or key == "Velocity")
-                    and typeof(self) == "Instance"
-                    and self:IsA("BasePart")
-                    and self.Name == "HumanoidRootPart"
-                    and self:IsDescendantOf(LP.Character) then
-                    return antiDropSpoofedVelocity
-                end
-                return oldIndex(self, key)
-            end))
-        end)
-
-        pcall(function()
-            oldNewIndex = hookMeta(game, "__newindex", newcclosure(function(self, key, value)
-                if not checkcaller()
-                    and antiDropEnabled
-                    and (key == "AssemblyLinearVelocity" or key == "Velocity")
-                    and typeof(self) == "Instance"
-                    and self:IsA("BasePart")
-                    and self.Name == "HumanoidRootPart"
-                    and self:IsDescendantOf(LP.Character) then
-                    if typeof(value) == "Vector3" then
-                        antiDropSpoofedVelocity = value
-                    end
-                    return
-                end
-                return oldNewIndex(self, key, value)
-            end))
-        end)
-    end
-end
-
-local function applyAntiDrop()
-    if not antiDropEnabled then return end
-
-    local char = LP.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not char or not hum or not root or hum.Health <= 0 then return end
-
-    local dir = hum.MoveDirection
-    if dir.Magnitude > 0.05 then
-        local unit = Vector3.new(dir.X, 0, dir.Z)
-        if unit.Magnitude > 0.001 then
-            unit = unit.Unit
-            antiDropSpoofedVelocity = Vector3.new(
-                unit.X * 16,
-                root.AssemblyLinearVelocity.Y,
-                unit.Z * 16
-            )
-            root.AssemblyLinearVelocity = Vector3.new(
-                unit.X * antiDropSpeed,
-                root.AssemblyLinearVelocity.Y,
-                unit.Z * antiDropSpeed
-            )
-        end
-    else
-        antiDropSpoofedVelocity = Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
-    end
-end
-
-local antiDropConn = RunService.PreSimulation:Connect(applyAntiDrop)
 MEDUSA_COOLDOWN=25;batCounterDebounce=false
 modeValLbl=nil;lastMoveDir=Vector3.new(0,0,0)
 _lastRagExitTime=0  -- only re-apply lastMoveDir for a short window after ragdoll exit
@@ -3038,145 +2957,8 @@ end
 -- ============================================================
 -- NEW AUTO STEAL LOGIC (logic only; no extra standalone GUI)
 -- ============================================================
-local STEAL_RADIUS = 69
+local STEAL_RADIUS = 61
 local STEAL_DURATION = 1.3
-local RAGDOLL_SYNC_MIN_DURATION = 1.3
-local RAGDOLL_SYNC_TRIGGER_REMAINING = 1.31
-
-local ragdollSync = {
-    active = false,
-    startedAt = 0,
-    duration = 0,
-    endAt = 0,
-    armed = false,
-    lastState = false,
-    lastMeasuredDuration = 2.5, -- fallback used until a real duration is observed
-}
-
-local function getRagdollSyncNow()
-    return workspace:GetServerTimeNow()
-end
-
-local function getRagdollEndTime()
-    local candidates = {
-        LP:GetAttribute("RagdollEndTime"),
-        LP:GetAttribute("RagdollEnd"),
-    }
-
-    local char = LP.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if char then
-        table.insert(candidates, char:GetAttribute("RagdollEndTime"))
-        table.insert(candidates, char:GetAttribute("RagdollEnd"))
-    end
-    if hum then
-        table.insert(candidates, hum:GetAttribute("RagdollEndTime"))
-        table.insert(candidates, hum:GetAttribute("RagdollEnd"))
-    end
-
-    for _, value in ipairs(candidates) do
-        if type(value) == "number" and value > getRagdollSyncNow() then
-            return value
-        end
-    end
-    return nil
-end
-
-local function getRagdollDurationHint()
-    local char = LP.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    local candidates = {
-        LP:GetAttribute("RagdollDuration"),
-        char and char:GetAttribute("RagdollDuration"),
-        hum and hum:GetAttribute("RagdollDuration"),
-    }
-
-    for _, value in ipairs(candidates) do
-        value = tonumber(value)
-        if value and value > 0 then
-            return value
-        end
-    end
-
-    return ragdollSync.lastMeasuredDuration > 0 and ragdollSync.lastMeasuredDuration or 2.5
-end
-
-local function isRagdollSyncState(hum)
-    if not hum then return false end
-    local state = hum:GetState()
-    return state == Enum.HumanoidStateType.Physics
-        or state == Enum.HumanoidStateType.Ragdoll
-        or hum.PlatformStand == true
-end
-
-local function beginRagdollSync()
-    if ragdollSync.active then return end
-
-    local now = getRagdollSyncNow()
-    local durationHint = getRagdollDurationHint()
-    local serverEnd = getRagdollEndTime()
-
-    ragdollSync.active = true
-    ragdollSync.startedAt = now
-    ragdollSync.duration = durationHint
-    ragdollSync.endAt = serverEnd or (now + durationHint)
-    ragdollSync.armed = ragdollSync.duration > RAGDOLL_SYNC_MIN_DURATION
-end
-
-local function finishRagdollSync()
-    if not ragdollSync.active then return end
-
-    local now = getRagdollSyncNow()
-    local measured = math.max(0, now - ragdollSync.startedAt)
-
-    -- If a server-provided end time was available, it is more reliable
-    -- than the local state transition, which can arrive a little late.
-    local predicted = ragdollSync.endAt - ragdollSync.startedAt
-    local actual = (predicted > RAGDOLL_SYNC_MIN_DURATION) and predicted or measured
-
-    ragdollSync.duration = actual
-    ragdollSync.lastMeasuredDuration = actual
-    ragdollSync.active = false
-    ragdollSync.armed = false
-    ragdollSync.endAt = 0
-end
-
-local function updateRagdollSync()
-    local char = LP.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not hum then
-        ragdollSync.lastState = false
-        ragdollSync.active = false
-        ragdollSync.armed = false
-        return
-    end
-
-    local ragdolled = isRagdollSyncState(hum)
-
-    if ragdolled and not ragdollSync.lastState then
-        beginRagdollSync()
-    elseif not ragdolled and ragdollSync.lastState then
-        finishRagdollSync()
-    end
-
-    ragdollSync.lastState = ragdolled
-
-    if ragdolled and ragdollSync.active then
-        local serverEnd = getRagdollEndTime()
-        if serverEnd then
-            ragdollSync.endAt = serverEnd
-            ragdollSync.duration = serverEnd - ragdollSync.startedAt
-            ragdollSync.armed = ragdollSync.duration > RAGDOLL_SYNC_MIN_DURATION
-        end
-
-        if ragdollSync.armed and ragdollSync.endAt - getRagdollSyncNow() <= 0 then
-            ragdollSync.armed = false
-        end
-    end
-end
-
-local ragdollSyncConn = RunService.Heartbeat:Connect(updateRagdollSync)
-
 local StealData = {}
 
 local function getStealHRP()
@@ -3293,28 +3075,9 @@ startAutoSteal=function()
     end
     Conns.autoSteal = RunService.Heartbeat:Connect(function()
         if not Steal.AutoStealEnabled or isStealing then return end
-
-        -- During a measured >1.3s ragdoll, wait until only 1.31s remains.
-        if ragdollSync.active and ragdollSync.armed and ragdollSync.endAt > 0 then
-            local remaining = ragdollSync.endAt - getRagdollSyncNow()
-            if remaining > RAGDOLL_SYNC_TRIGGER_REMAINING then
-                return
-            end
-
-            local success, prompt = pcall(findNearestPromptNew)
-            if success and prompt then
-                ragdollSync.armed = false
-                pcall(executeStealNew, prompt)
-            end
-            return
-        end
-
-        -- Normal auto-steal behavior outside the synchronized window.
-        if not ragdollSync.active then
-            local success, prompt = pcall(findNearestPromptNew)
-            if success and prompt then
-                pcall(executeStealNew, prompt)
-            end
+        local success, prompt = pcall(findNearestPromptNew)
+        if success and prompt then
+            pcall(executeStealNew, prompt)
         end
     end)
 end
@@ -4741,7 +4504,6 @@ saveConfig=function()
             guiHideKey=ks(KB.GuiHide), speedToggleKey=ks(KB.SpeedToggle), antiDesyncKey=ks(KB.AntiDesync),
             grabRadius=Steal.StealRadius, stealDuration=Steal.StealDuration, stealMode=Steal.StealMode or "normal",
             antiRagdoll=antiRagdollEnabled==true,
-            antiDrop=antiDropEnabled==true,
             antiFling=true,
             playerEsp=playerEspEnabled==true,
             playerTracers=playerTracersEnabled==true,
@@ -4793,11 +4555,11 @@ end
 task.spawn(function() while task.wait(5) do saveConfig() end end)
 local function resetAllSettings()
     NS=60;CS=30;LAGGER_SPEED=15;LAGGER_CARRY_SPEED=24.5;carrySpeedActive=false;laggerModeEnabled=false;laggerCarryActive=false
-    antiRagdollEnabled=false;antiDropEnabled=false;infJumpEnabled=false;infJumpMode="manual"
+    antiRagdollEnabled=false;infJumpEnabled=false;infJumpMode="manual"
     medusaCounterEnabled=false;batCounterEnabled=false;unwalkEnabled=false
     autoLeftEnabled=false;autoRightEnabled=false;autoBatEnabled=false;autoSwingEnabled=true;autoMoveSwingEnabled=false
     autoTPEnabled=false;autoTPHeight=30;mirrorTPDownEnabled=false;antiLagEnabled=false
-    Steal.AutoStealEnabled=false;Steal.StealRadius=69;Steal.StealDuration=1.3;Steal.StealRange=10
+    Steal.AutoStealEnabled=false;Steal.StealRadius=60;Steal.StealDuration=1.3;Steal.StealRange=10
     guiTransparencyEnabled=false;mobileButtonsEnabled=true;mobileButtonsSize=80
     circleButtonsEnabled=false;antiKickEnabled=false;uiLocked=false;fovValue=80;fovIndex=1
     KB.DropBrainrot={kb=nil,gp=nil};KB.AutoLeft={kb=nil,gp=nil};KB.AutoRight={kb=nil,gp=nil}
@@ -6976,8 +6738,6 @@ local function buildGui()
         end)
     end
     setAntiRagVisual=mkToggle(pg,"Anti Ragdoll",function(on) antiRagdollEnabled=on;if on then startAntiRagdoll() else stopAntiRagdoll() end;saveConfig() end)
-    setAntiDropVisual=mkToggle(pg,"Anti Drop",function(on) antiDropEnabled=on==true;saveConfig() end)
-    if setAntiDropVisual then setAntiDropVisual(antiDropEnabled==true) end
     -- Anti Fling is always-on (built into aimbot + global clamp); no toggle
     setBatCounterVisual=mkToggle(pg,"Bat Counter",function(on) batCounterEnabled=on;if on then startBatCounter() else stopBatCounter() end;saveConfig() end)
     setMedusaVisual=mkToggle(pg,"Medusa Counter",function(on) medusaCounterEnabled=on;if on then setupMedusa(LP.Character) else stopMedusaCounter() end;saveConfig() end)
@@ -7052,7 +6812,7 @@ local function buildGui()
             if Steal.StealMode == "semi" then
                 Steal.StealRange = Steal.StealRange or 10
             else
-                if not Steal.StealRadius or Steal.StealRadius < 20 then Steal.StealRadius = 69 end
+                if not Steal.StealRadius or Steal.StealRadius < 20 then Steal.StealRadius = 60 end
             end
             Steal.StealDuration = Steal.StealDuration or 1.3
             saveConfig()
@@ -7481,7 +7241,6 @@ local function loadConfigKeys()
     if cfg.mobileButtonsSize~=nil then mobileButtonsSize=cfg.mobileButtonsSize end
     if cfg.circleButtonsEnabled~=nil then circleButtonsEnabled=cfg.circleButtonsEnabled==true end
     if cfg.antiKick~=nil then antiKickEnabled=cfg.antiKick==true end
-    if cfg.antiDrop~=nil then antiDropEnabled=cfg.antiDrop==true end
     if cfg.safeMode~=nil then safeModeEnabled=cfg.safeMode==true end
 
         if type(cfg.animPack)=="string" then animPack=cfg.animPack end
@@ -7525,7 +7284,6 @@ local function loadConfigState()
     task.spawn(function()
         task.wait(0.15)
         if cfg.antiRagdoll then antiRagdollEnabled=true;if setAntiRagVisual then setAntiRagVisual(true) end;startAntiRagdoll() end
-        if cfg.antiDrop then antiDropEnabled=true;if setAntiDropVisual then setAntiDropVisual(true) end end
         -- anti fling always on
         pcall(startAntiFling)
         if cfg.playerEsp then playerEspEnabled=true;if setPlayerEspVisual then setPlayerEspVisual(true) end;startPlayerEsp() end
