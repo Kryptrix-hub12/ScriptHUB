@@ -137,7 +137,7 @@ getconnections = getconnections or get_signal_cons or getconnects
 
 
 -- ============================================================
--- K7 HUB LOGO (rbxassetid only Ã¢â‚¬â€ no embedded image)
+-- K7 HUB LOGO (rbxassetid only â€” no embedded image)
 -- ============================================================
 local K7_LOGO_RBX = "rbxassetid://135382218880707"
 local _k7LogoAsset = K7_LOGO_RBX
@@ -826,6 +826,20 @@ medusaCounterEnabled,batCounterEnabled,unwalkEnabled=false,false,false
 medusaDebounce,medusaLastUsed,dropActive=false,0,false
 autoLeftEnabled,autoRightEnabled=false,false
 autoLeftSetVisual,autoRightSetVisual=nil,nil
+autoTPLeftEnabled,autoTPRightEnabled=true,false
+autoTPLeftSetVisual,autoTPRightSetVisual=nil,nil
+autoTPLeftConn,autoTPRightConn=nil,nil
+autoTPLeftRecovered,autoTPRightRecovered=true,true
+autoTPLeftBusy,autoTPRightBusy=false,false
+ragdollSyncAutoStealEnabled=false
+RAGDOLL_STEAL_LEAD=0.015
+ragdollStealScheduleToken=0
+antiDropEnabled=false
+antiDropHooksInstalled=false
+antiBatEnabled=false
+antiBatConnection=nil
+spoofedVelocity=Vector3.zero
+speedValue=59
 speedLabel=nil
 autoBatEnabled=false
 batAimbotEnabled=false
@@ -860,6 +874,7 @@ progressFill=nil
 setStealStatusText=nil
 mobBtnRefs={}
 mobGuiRef=nil
+mobViewportConn=nil
 fovValue=80
 fovOptions={80,120,180}
 fovIndex=1
@@ -949,6 +964,10 @@ end)
 refreshSpeedModeLabel,saveConfig=nil,nil
 startUnwalk,stopUnwalk,setupMedusa,stopMedusaCounter=nil,nil,nil,nil
 startAntiRagdoll,stopAntiRagdoll,startAutoLeft,stopAutoLeft,startAutoRight,stopAutoRight=nil,nil,nil,nil,nil,nil
+startAutoTPLeft,stopAutoTPLeft,startAutoTPRight,stopAutoTPRight=nil,nil,nil,nil
+setAutoTPLeftVisual,setAutoTPRightVisual,setRagdollSyncVisual,setAntiBatVisual=nil,nil,nil,nil
+enableAntiDrop,disableAntiDrop=nil,nil
+startAntiBat,stopAntiBat=nil,nil
 startAutoTP,stopAutoTP,enableAntiLag,disableAntiLag=nil,nil,nil,nil
 startBatAimbot,stopBatAimbot,queueAutoBatStart,runDrop,runTPFloor,startTPBat,stopTPBat=nil,nil,nil,nil,nil,nil,nil
 startAutoSteal,stopAutoSteal,enableAntiKick,disableAntiKick,toggleCarryMode,toggleLaggerMode,toggleLaggerCarryMode=nil,nil,nil,nil,nil,nil,nil
@@ -1180,13 +1199,17 @@ do
                                state == Enum.HumanoidStateType.Ragdoll or 
                                state == Enum.HumanoidStateType.FallingDown
             
-            if isRagdolled and not lastRagdollState and not timerActive then
-                if not timerBillboard or not timerBillboard.Parent then
-                    createTimerBillboard()
+            if isRagdolled and not lastRagdollState then
+                handleRagdollTPState(true)
+                scheduleRagdollSyncedSteal()
+                if not timerActive then
+                    if not timerBillboard or not timerBillboard.Parent then createTimerBillboard() end
+                    startRagdollTimer()
                 end
-                startRagdollTimer()
+            elseif not isRagdolled and lastRagdollState then
+                handleRagdollTPState(false)
+                ragdollStealScheduleToken+=1
             end
-            
             lastRagdollState = isRagdolled
         end)
     end
@@ -2819,7 +2842,48 @@ end
 KB={DropBrainrot={kb=nil,gp=nil},AutoLeft={kb=nil,gp=nil},AutoRight={kb=nil,gp=nil},AutoBat={kb=nil,gp=nil},TPBat={kb=nil,gp=nil},TPFloor={kb=nil,gp=nil},GuiHide={kb=nil,gp=nil},SpeedToggle={kb=nil,gp=nil},LaggerToggle={kb=nil,gp=nil},LaggerCarry={kb=nil,gp=nil},AntiDesync={kb=nil,gp=nil},LaggerPanel={kb=nil,gp=nil}}
 AP_L1,AP_L2=Vector3.new(-476.47,-6.28,92.73),Vector3.new(-483.12,-4.95,94.81)
 AP_R1,AP_R2=Vector3.new(-476.16,-6.52,25.62),Vector3.new(-483.06,-5.03,25.48)
-Steal={AutoStealEnabled=false,StealRadius=60,StealDuration=1.3,StealMode="normal",StealRange=10,EntryDelay=0.3,HoldMax=2.6,Data={},plotCache={},plotCacheTime={},cachedPrompts={},promptCacheTime=0}
+
+local RAG_TP_CHECKPOINT_A=Vector3.new(-472.60,-7.00,57.52)
+local RAG_TP_LEFT_B=Vector3.new(-472.65,-7.00,95.69)
+local RAG_TP_LEFT_FINAL=Vector3.new(-483.59,-5.04,104.24)
+local RAG_TP_RIGHT_B=Vector3.new(-471.76,-7.00,26.22)
+local RAG_TP_RIGHT_FINAL=Vector3.new(-483.51,-5.10,18.89)
+local RAG_TP_STEP_DELAY=0.12
+local function ragdollTeleportTo(pos)
+    local char=LP.Character;if not char or not char.Parent then return false end
+    local hrp=char:FindFirstChild("HumanoidRootPart");if not hrp then return false end
+    local ok=pcall(function() char:PivotTo(CFrame.new(pos)) end)
+    if not ok then ok=pcall(function() hrp.CFrame=CFrame.new(pos) end) end
+    return ok
+end
+local function runRagdollTPSequence(side)
+    local isLeft=side=="left"
+    if isLeft then
+        if not autoTPLeftEnabled or autoTPLeftBusy or not autoTPLeftRecovered then return end
+        autoTPLeftBusy=true;autoTPLeftRecovered=false
+    else
+        if not autoTPRightEnabled or autoTPRightBusy or not autoTPRightRecovered then return end
+        autoTPRightBusy=true;autoTPRightRecovered=false
+    end
+    task.spawn(function()
+        local function enabled() return isLeft and autoTPLeftEnabled or (not isLeft and autoTPRightEnabled) end
+        if enabled() then ragdollTeleportTo(RAG_TP_CHECKPOINT_A) end
+        task.wait(RAG_TP_STEP_DELAY)
+        if enabled() then ragdollTeleportTo(isLeft and RAG_TP_LEFT_B or RAG_TP_RIGHT_B) end
+        task.wait(RAG_TP_STEP_DELAY)
+        if enabled() then ragdollTeleportTo(isLeft and RAG_TP_LEFT_FINAL or RAG_TP_RIGHT_FINAL) end
+        if isLeft then autoTPLeftBusy=false else autoTPRightBusy=false end
+    end)
+end
+handleRagdollTPState=function(isRagdolled)
+    if isRagdolled then
+        if autoTPLeftEnabled then runRagdollTPSequence("left") end
+        if autoTPRightEnabled then runRagdollTPSequence("right") end
+    else
+        autoTPLeftRecovered=true;autoTPRightRecovered=true
+    end
+end
+Steal={AutoStealEnabled=false,StealRadius=69.8,StealDuration=1.3,StealMode="normal",StealRange=10,EntryDelay=0.3,HoldMax=2.6,Data={},plotCache={},plotCacheTime={},cachedPrompts={},promptCacheTime=0}
 lastStealTick=0
 isStealing,stealStartTime=false,nil
 Conns={autoSteal=nil,antiRag=nil,batCounter=nil,anchor={}}
@@ -2830,9 +2894,130 @@ MOVE_KEYS={[Enum.KeyCode.W]=true,[Enum.KeyCode.A]=true,[Enum.KeyCode.S]=true,[En
 local function isRagdollState(hum)
     if not hum then return true end
     local st=hum:GetState()
-    -- FallingDown is normal (jumps/falls) - treating it as ragdoll caused random death loops
     return hum.PlatformStand or st==Enum.HumanoidStateType.Physics or st==Enum.HumanoidStateType.Ragdoll
 end
+
+local function installAntiDropHooks()
+    if antiDropHooksInstalled or typeof(hookmetamethod)~="function" then return end
+    antiDropHooksInstalled=true
+
+    local oldIndex
+    oldIndex=hookmetamethod(game,"__index",newcclosure(function(self,key)
+        if antiDropEnabled and (not checkcaller or not checkcaller()) and (key=="AssemblyLinearVelocity" or key=="Velocity") then
+            local char=LP.Character
+            local hrp=char and char:FindFirstChild("HumanoidRootPart")
+            if typeof(self)=="Instance" and self:IsA("BasePart") and self.Name=="HumanoidRootPart" and hrp and self==hrp and self:IsDescendantOf(char) then
+                return spoofedVelocity
+            end
+        end
+        return oldIndex(self,key)
+    end))
+
+    local oldNewIndex
+    oldNewIndex=hookmetamethod(game,"__newindex",newcclosure(function(self,key,value)
+        if antiDropEnabled and (not checkcaller or not checkcaller()) and (key=="AssemblyLinearVelocity" or key=="Velocity") and typeof(value)=="Vector3" then
+            local char=LP.Character
+            local hrp=char and char:FindFirstChild("HumanoidRootPart")
+            if typeof(self)=="Instance" and self:IsA("BasePart") and self.Name=="HumanoidRootPart" and hrp and self==hrp and self:IsDescendantOf(char) then
+                spoofedVelocity=value
+                return
+            end
+        end
+        return oldNewIndex(self,key,value)
+    end))
+end
+
+local function applyVelocitySpeed(speed)
+    if not antiDropEnabled then return end
+    local char=LP.Character
+    local hum=char and char:FindFirstChildOfClass("Humanoid")
+    local root=char and char:FindFirstChild("HumanoidRootPart")
+    if not char or not hum or not root or hum.Health<=0 then return end
+
+    local dir=hum.MoveDirection
+    if dir.Magnitude>0.05 then
+        pcall(function()
+            if root.SetNetworkOwner then root:SetNetworkOwner(LP) end
+        end)
+        local unit=dir.Unit
+        local y=root.AssemblyLinearVelocity.Y
+        spoofedVelocity=Vector3.new(unit.X*16,y,unit.Z*16)
+        pcall(function()
+            root.AssemblyLinearVelocity=Vector3.new(unit.X*speed,y,unit.Z*speed)
+        end)
+    else
+        spoofedVelocity=Vector3.new(0,root.AssemblyLinearVelocity.Y,0)
+    end
+end
+
+local antiDropSimulationConn=RunService.PreSimulation:Connect(function()
+    applyVelocitySpeed(speedValue)
+end)
+
+local function setupAntiDie(char)
+    local humanoid=char:WaitForChild("Humanoid",5)
+    if not humanoid then return end
+    humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+        if antiDropEnabled and humanoid.Health>0 and humanoid.Health<humanoid.MaxHealth then
+            humanoid.Health=humanoid.MaxHealth
+        end
+    end)
+    humanoid.Died:Connect(function()
+        if antiDropEnabled then
+            task.wait()
+            pcall(function() humanoid.Health=humanoid.MaxHealth end)
+        end
+    end)
+    pcall(function()
+        game:GetService("StarterGui"):SetCore("ResetButtonCallback",not antiDropEnabled and true or false)
+    end)
+end
+
+if LP.Character then task.spawn(setupAntiDie,LP.Character) end
+LP.CharacterAdded:Connect(function(char)
+    task.spawn(setupAntiDie,char)
+    task.wait(0.2)
+    if antiDropEnabled then
+        pcall(function() game:GetService("StarterGui"):SetCore("ResetButtonCallback",false) end)
+    end
+end)
+
+enableAntiDrop=function()
+    antiDropEnabled=true
+    installAntiDropHooks()
+    pcall(function() game:GetService("StarterGui"):SetCore("ResetButtonCallback",false) end)
+end
+
+disableAntiDrop=function()
+    antiDropEnabled=false
+    pcall(function() game:GetService("StarterGui"):SetCore("ResetButtonCallback",true) end)
+end
+
+startAntiBat=function()
+    if antiBatConnection then antiBatConnection:Disconnect() end
+    antiBatConnection=RunService.Heartbeat:Connect(function()
+        if not antiBatEnabled then return end
+        local character=LP.Character
+        local rootPart=character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then return end
+        local originalVelocity=rootPart.Velocity
+        rootPart.Velocity=Vector3.new(1000,rootPart.Velocity.Y,1000)
+        task.spawn(function()
+            RunService.RenderStepped:Wait()
+            if antiBatEnabled and rootPart and rootPart.Parent then
+                rootPart.Velocity=originalVelocity
+            end
+        end)
+    end)
+end
+
+stopAntiBat=function()
+    if antiBatConnection then
+        antiBatConnection:Disconnect()
+        antiBatConnection=nil
+    end
+end
+
 local function isMyPlotByName(plotName)
     local ct=tick()
     if Steal.plotCache[plotName] ~= nil and (ct-(Steal.plotCacheTime[plotName] or 0)) < 2 then
@@ -2957,7 +3142,7 @@ end
 -- ============================================================
 -- NEW AUTO STEAL LOGIC (logic only; no extra standalone GUI)
 -- ============================================================
-local STEAL_RADIUS = 61
+local STEAL_RADIUS = 69.8
 local STEAL_DURATION = 1.3
 local StealData = {}
 
@@ -3024,7 +3209,7 @@ local function updateNewStealProgress(p)
     end
 end
 
-local function executeStealNew(prompt)
+local function executeStealNew(prompt,forcedDuration,forcedEndTime)
     if isStealing or not prompt then return end
     if not StealData[prompt] then
         StealData[prompt] = {hold = {}, trigger = {}, ready = true}
@@ -3048,10 +3233,18 @@ local function executeStealNew(prompt)
 
     task.spawn(function()
         local startTime = tick()
+        local duration = tonumber(forcedDuration) or STEAL_DURATION
+        local endAt = tonumber(forcedEndTime)
         for _, f in ipairs(data.hold) do pcall(f) end
 
-        while tick() - startTime < STEAL_DURATION do
-            updateNewStealProgress((tick() - startTime) / STEAL_DURATION)
+        while true do
+            local elapsed=tick()-startTime
+            local remainingByClock=duration-elapsed
+            local remainingByRagdoll=endAt and (endAt-workspace:GetServerTimeNow()) or remainingByClock
+            local remaining=math.min(remainingByClock,remainingByRagdoll)
+            if remaining<=0 then break end
+            local progress=1-(remaining/duration)
+            updateNewStealProgress(progress)
             task.wait()
         end
 
@@ -3075,6 +3268,10 @@ startAutoSteal=function()
     end
     Conns.autoSteal = RunService.Heartbeat:Connect(function()
         if not Steal.AutoStealEnabled or isStealing then return end
+        if ragdollSyncAutoStealEnabled then
+            local c=LP.Character;local h=c and c:FindFirstChildOfClass("Humanoid")
+            if h and isRagdollState(h) then return end
+        end
         local success, prompt = pcall(findNearestPromptNew)
         if success and prompt then
             pcall(executeStealNew, prompt)
@@ -3082,6 +3279,36 @@ startAutoSteal=function()
     end)
 end
 
+scheduleRagdollSyncedSteal=function()
+    if not ragdollSyncAutoStealEnabled or not Steal.AutoStealEnabled then return end
+    ragdollStealScheduleToken+=1
+    local token=ragdollStealScheduleToken
+    task.spawn(function()
+        local targetDuration=1.3
+        local now=workspace:GetServerTimeNow()
+        local endTime=LP:GetAttribute("RagdollEndTime")
+        if type(endTime)~="number" or endTime<=now then
+            endTime=now+(lastRagdollDuration or 2.5)
+        end
+        local targetStart=endTime-targetDuration
+        while token==ragdollStealScheduleToken and ragdollSyncAutoStealEnabled and Steal.AutoStealEnabled and not isStealing do
+            local char=LP.Character
+            local hum=char and char:FindFirstChildOfClass("Humanoid")
+            if not hum or not isRagdollState(hum) then return end
+            local left=targetStart-workspace:GetServerTimeNow()
+            if left<=0 then break end
+            task.wait(math.min(left,0.005))
+        end
+        if token~=ragdollStealScheduleToken or not ragdollSyncAutoStealEnabled or not Steal.AutoStealEnabled or isStealing then return end
+        local ok,prompt=pcall(findNearestPromptNew)
+        if ok and prompt then
+            local oldDuration=STEAL_DURATION
+            STEAL_DURATION=targetDuration
+            pcall(executeStealNew,prompt)
+            STEAL_DURATION=oldDuration
+        end
+    end)
+end
 stopAutoSteal=function()
     Steal.AutoStealEnabled = false
     if Conns.autoSteal then
@@ -3357,6 +3584,25 @@ startAutoRight=function()
         end
     end)
 end
+
+startAutoTPLeft=function()
+    if autoTPLeftConn then autoTPLeftConn:Disconnect() end
+    autoTPLeftConn=RunService.Heartbeat:Connect(function()
+        if not autoTPLeftEnabled then return end
+        local c=LP.Character;local h=c and c:FindFirstChildOfClass("Humanoid");if not h then return end
+        handleRagdollTPState(isRagdollState(h))
+    end)
+end
+stopAutoTPLeft=function() if autoTPLeftConn then autoTPLeftConn:Disconnect();autoTPLeftConn=nil end;autoTPLeftBusy=false;autoTPLeftRecovered=true end
+startAutoTPRight=function()
+    if autoTPRightConn then autoTPRightConn:Disconnect() end
+    autoTPRightConn=RunService.Heartbeat:Connect(function()
+        if not autoTPRightEnabled then return end
+        local c=LP.Character;local h=c and c:FindFirstChildOfClass("Humanoid");if not h then return end
+        handleRagdollTPState(isRagdollState(h))
+    end)
+end
+stopAutoTPRight=function() if autoTPRightConn then autoTPRightConn:Disconnect();autoTPRightConn=nil end;autoTPRightBusy=false;autoTPRightRecovered=true end
 
 -- Aimbot anti-fling (defined early so V1/TP bat can call it; strengthened later)
 local ANTI_FLING_AIMBOT_LIN = 95
@@ -3886,67 +4132,51 @@ end
 
 -- ========== BAT AIMBOT ==========
 function StartBatAimbot()
-    -- force stop other aimbot modes first
-    if antiBatBypassLockEnabled then StopAntiBatBypassLock() end
     if AceNormalAimbot.conn then AceNormalAimbot.conn:Disconnect(); AceNormalAimbot.conn = nil end
     batAimbotEnabled = true
     autoBatEnabled = true
     local hum0 = LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
     if hum0 then hum0.AutoRotate = false end
-    pcall(function() if pauseAutoTP then pauseAutoTP() end end)
-    pcall(ensureBatEquipped)
 
-    -- Vanta / simplified normal bat aimbot (RenderStepped velocity chase)
     AceNormalAimbot.conn = RunService.RenderStepped:Connect(function()
-        if not batAimbotEnabled then return end
-
-        local char = LP.Character
-        if not char then return end
-        local root = char:FindFirstChild("HumanoidRootPart")
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not root or not hum then return end
-
-        local bat = ensureBatEquipped() or FindAimbotBat()
-        if bat and bat.Parent ~= char then
-            pcall(function() hum:EquipTool(bat) end)
+        if not autoBatEnabled then return end
+        local c = LP.Character
+        if not c then return end
+        local root = c:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        if not c:FindFirstChildOfClass("Tool") then
+            local bat = findBat()
+            if bat then pcall(function() hum:EquipTool(bat) end) end
         end
-
-        local target = GetClosestAimbotTarget()
+        local target = getClosestTarget()
         if not target then
-            AceNormalAimbot.target = nil
-            if autoSwingEnabled and bat then
+            local bat = findBat()
+            if bat then
+                if bat.Parent ~= c then pcall(function() hum:EquipTool(bat) end) end
                 pcall(function() bat:Activate() end)
             end
             return
         end
-        AceNormalAimbot.target = target
-
         local targetVel = target.AssemblyLinearVelocity
-        pcall(function()
-            if (not targetVel or targetVel.Magnitude < 0.01) and target.Velocity then
-                targetVel = target.Velocity
-            end
-        end)
-        if typeof(targetVel) ~= "Vector3" then targetVel = Vector3.zero end
-
         local myPos = root.Position
         local targetPos = target.Position
         local predictPos = targetPos + targetVel * 0.14 + target.CFrame.LookVector * 0.3
         local direction = predictPos - myPos
-        local flat = Vector3.new(direction.X, 0, direction.Z)
-        local flatDir = (flat.Magnitude > 0.01) and flat.Unit or Vector3.zero
-
-        local chaseSpeed = (type(GetBatAimbotSpeed)=="function" and GetBatAimbotSpeed()) or 58
+        local flatDir = Vector3.new(direction.X, 0, direction.Z)
+        if flatDir.Magnitude < 0.05 then
+            flatDir = root.CFrame.LookVector
+        else
+            flatDir = flatDir.Unit
+        end
+        local chaseSpeed = 58
         local desiredHeight = targetPos.Y + 3.7
         local yVel = (desiredHeight - myPos.Y) * 19.5 + targetVel.Y * 0.8
-        if hum.FloorMaterial ~= Enum.Material.Air then
-            yVel = math.max(yVel, 13)
-        end
+        if hum.FloorMaterial ~= Enum.Material.Air then yVel = math.max(yVel, 13) end
         yVel = math.clamp(yVel, -70, 110)
-
         local desiredVel = Vector3.new(flatDir.X * chaseSpeed, yVel, flatDir.Z * chaseSpeed)
         root.AssemblyLinearVelocity = root.AssemblyLinearVelocity:Lerp(desiredVel, 0.8)
-        pcall(function() root.Velocity = root.AssemblyLinearVelocity end)
 
         local speed3 = targetVel.Magnitude
         local predictTime = math.clamp(speed3 / 150, 0.05, 0.2)
@@ -3954,36 +4184,40 @@ function StartBatAimbot()
         local toPredict = predictedPos - myPos
         if toPredict.Magnitude > 0.1 then
             local goalCF = CFrame.lookAt(myPos, predictedPos)
-            local diffCF = root.CFrame:Inverse() * goalCF
+            local curCF = root.CFrame
+            local diffCF = curCF:Inverse() * goalCF
             local rx, ry, rz = diffCF:ToEulerAnglesXYZ()
             rx = math.clamp(rx, -2.5, 2.5)
             ry = math.clamp(ry, -2.5, 2.5)
             rz = math.clamp(rz, -2.5, 2.5)
-            root.AssemblyAngularVelocity = root.CFrame:VectorToWorldSpace(Vector3.new(rx * 42, ry * 42, rz * 42))
+            local tiltSpeed = 42
+            root.AssemblyAngularVelocity = root.CFrame:VectorToWorldSpace(
+                Vector3.new(rx * tiltSpeed, ry * tiltSpeed, rz * tiltSpeed)
+            )
         end
-
-        if autoSwingEnabled and bat then
+        local bat = findBat()
+        if bat then
+            if bat.Parent ~= c then pcall(function() hum:EquipTool(bat) end) end
             pcall(function() bat:Activate() end)
         end
     end)
-    if setBatAimbotVisual then setBatAimbotVisual(true) end
-    if autoBatSetVisual then autoBatSetVisual(true) end
-    if mobBtnRefs and mobBtnRefs.autoBat then mobBtnRefs.autoBat(true) end
 end
 
 function StopBatAimbot()
+    if AceNormalAimbot and AceNormalAimbot.conn then
+        AceNormalAimbot.conn:Disconnect()
+        AceNormalAimbot.conn = nil
+    end
     batAimbotEnabled = false
     autoBatEnabled = false
-    if AceNormalAimbot and AceNormalAimbot.conn then
-        AceNormalAimbot.conn:Disconnect(); AceNormalAimbot.conn = nil
+    local char = LP.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root then
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
     end
-    if AceNormalAimbot then AceNormalAimbot.target = nil; AceNormalAimbot.swingCooldown = false end
-    local c = LP.Character
-    local root = c and c:FindFirstChild("HumanoidRootPart")
-    if root then root.AssemblyLinearVelocity = Vector3.zero; root.AssemblyAngularVelocity = Vector3.zero end
-    local hum2 = c and c:FindFirstChildOfClass("Humanoid")
-    if hum2 then hum2.AutoRotate = true end
-    pcall(function() if not tpBatEnabled and resumeAutoTP then resumeAutoTP() end end)
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if hum then hum.AutoRotate = true end
     if setBatAimbotVisual then setBatAimbotVisual(false) end
     if autoBatSetVisual then autoBatSetVisual(false) end
     if mobBtnRefs and mobBtnRefs.autoBat then mobBtnRefs.autoBat(false) end
@@ -4263,216 +4497,91 @@ local function _tpGodEnable()
 end
 
 
-startTPBat=function()
-    if tpBatConn then pcall(function() tpBatConn:Disconnect() end); tpBatConn=nil end
-    tpBatEnabled = true
-    pauseAutoTP()
-    pcall(_tpGodEnable)
-    pcall(ensureBatEquipped)
+local function getChar() return LP.Character end
+local function getHRP()
+    local c = getChar()
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function getHum()
+    local c = getChar()
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
 
+
+startTPBat=function()
+    if tpBatConn then tpBatConn:Disconnect() end
+    tpBatEnabled = true
     local hittingCooldown = false
-    local function getBat()
+
+    local function getBatTool()
         local char = LP.Character
         if not char then return nil end
-        local function isBat(tool)
-            if not tool or not tool:IsA("Tool") then return false end
-            local n = tool.Name:lower()
-            return n:find("bat") or n:find("slap") or n:find("glove") or n:find("hand")
+        local tool = char:FindFirstChild("Bat")
+        if tool then return tool end
+        for _, t in ipairs(char:GetChildren()) do
+            if t:IsA("Tool") and (t.Name:lower():find("bat") or t.Name:lower():find("slap")) then
+                return t
+            end
         end
-        for _, tool in ipairs(char:GetChildren()) do
-            if isBat(tool) then return tool end
-        end
-        local bp = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+        local bp = LP:FindFirstChild("Backpack")
         if bp then
-            for _, tool in ipairs(bp:GetChildren()) do
-                if isBat(tool) then
-                    pcall(function()
-                        local hum = char:FindFirstChildOfClass("Humanoid")
-                        if hum then hum:EquipTool(tool) end
-                    end)
-                    return tool
+            tool = bp:FindFirstChild("Bat")
+            if tool then tool.Parent = char; return tool end
+            for _, t in ipairs(bp:GetChildren()) do
+                if t:IsA("Tool") and (t.Name:lower():find("bat") or t.Name:lower():find("slap")) then
+                    t.Parent = char
+                    return t
                 end
             end
         end
-        return char:FindFirstChild("Bat")
+        return nil
     end
-    local function tryHitBat()
-        if not autoSwingEnabled then return end
+
+    local function executeBatHit()
         if hittingCooldown then return end
         hittingCooldown = true
         pcall(function()
-            -- prefer shared swing helper so equip + activate match bat aimbot
-            if swingCurrentBat then
-                swingCurrentBat()
-            else
-                local bat = getBat()
-                if bat then
-                    local char = LP.Character
-                    local hum = char and char:FindFirstChildOfClass("Humanoid")
-                    if hum and bat.Parent ~= char then
-                        pcall(function() hum:EquipTool(bat) end)
-                    end
-                    bat:Activate()
-                    local ev = bat:FindFirstChildWhichIsA("RemoteEvent")
-                    if ev then ev:FireServer() end
-                end
+            local bat = getBatTool()
+            if bat then
+                bat:Activate()
+                local remote = bat:FindFirstChildWhichIsA("RemoteEvent")
+                if remote then remote:FireServer() end
             end
         end)
-        task.delay(0.1, function() hittingCooldown = false end)
-    end
-    local function getClosestPlayer()
-        local tr, dist = getClosestTarget()
-        if not tr or not tr.Parent then return nil, math.huge end
-        local model = tr.Parent
-        local plr = Players:GetPlayerFromCharacter(model)
-        return plr, dist
+        task.delay(0.08, function() hittingCooldown = false end)
     end
 
     tpBatConn = RunService.Heartbeat:Connect(function()
         if not tpBatEnabled then return end
-        local char = LP.Character
-        if not char then return end
-        local root = char:FindFirstChild("HumanoidRootPart")
-        local hum = char:FindFirstChildOfClass("Humanoid")
-        if not root or not hum then return end
-        -- always keep bat equipped
-        pcall(ensureBatEquipped)
-        -- anti-die every frame (TP bat only)
+        local hrp = getHRP()
+        local hum = getHum()
+        if not hrp or not hum then return end
+        local target = getClosestTarget()
+        if not target then return end
         pcall(function()
-            hum.MaxHealth = math.max(hum.MaxHealth, 100)
-            hum.Health = hum.MaxHealth
-            hum.BreakJointsOnDeath = false
-            hum.RequiresNeck = false
-            hum.PlatformStand = false
-            hum.Sit = false
-            local st = hum:GetState()
-            if st == Enum.HumanoidStateType.Dead
-                or st == Enum.HumanoidStateType.Physics
-                or st == Enum.HumanoidStateType.Ragdoll
-                or st == Enum.HumanoidStateType.FallingDown then
-                hum:ChangeState(Enum.HumanoidStateType.Running)
-            end
-            if not char:FindFirstChild("K7TPBatFF") then
-                local ff = Instance.new("ForceField")
-                ff.Name = "K7TPBatFF"
-                ff.Visible = false
-                ff.Parent = char
+            if sethiddenproperty then
+                sethiddenproperty(hrp, "PhysicsRepRootPart", target)
             end
         end)
-        local target = select(1, getClosestPlayer())
-        if not target or not target.Character then
-            cleanupPredBall()
-            return
+        local targetPosition = target.Position + Vector3.new(0, 0.9, 0)
+        if (hrp.Position - targetPosition).Magnitude > 8 then
+            hrp.CFrame = CFrame.new(targetPosition)
         end
-        local tr = target.Character:FindFirstChild("HumanoidRootPart")
-        if not tr then return end
-        pcall(function()
-            if sethiddenproperty then sethiddenproperty(root, "PhysicsRepRootPart", tr) end
-        end)
-        -- soft stick near target (offset so we don't clip inside them = less server kills)
-        local back = tr.CFrame.LookVector
-        local flatBack = Vector3.new(back.X, 0, back.Z)
-        local offset
-        if flatBack.Magnitude < 0.05 then
-            offset = Vector3.new(0, 1.2, 2.2)
-        else
-            offset = Vector3.new(0, 1.2, 0) - (flatBack.Unit * 2.2)
+        local camera = workspace.CurrentCamera
+        if camera then
+            camera.CFrame = CFrame.new(camera.CFrame.Position, target.Position)
         end
-        local targetPos = tr.Position + offset
-        local dist = (root.Position - targetPos).Magnitude
-        if dist > 10 then
-            root.CFrame = CFrame.new(targetPos, tr.Position)
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        elseif dist > 2.5 then
-            -- gentle pull instead of hard snap
-            local dir = (targetPos - root.Position)
-            local flatDir = Vector3.new(dir.X, 0, dir.Z)
-            if flatDir.Magnitude > 0.05 then
-                root.AssemblyLinearVelocity = flatDir.Unit * math.min(55, dist * 8)
-                    + Vector3.new(0, root.AssemblyLinearVelocity.Y * 0.2, 0)
-            end
-            local flat = Vector3.new(tr.Position.X - root.Position.X, 0, tr.Position.Z - root.Position.Z)
-            if flat.Magnitude > 0.1 then
-                root.CFrame = CFrame.new(root.Position, root.Position + flat.Unit)
-            end
-        else
-            local flat = Vector3.new(tr.Position.X - root.Position.X, 0, tr.Position.Z - root.Position.Z)
-            if flat.Magnitude > 0.1 then
-                root.CFrame = CFrame.new(root.Position, root.Position + flat.Unit)
-            end
-            -- damp residual velocity when already in range
-            local v = root.AssemblyLinearVelocity
-            root.AssemblyLinearVelocity = Vector3.new(v.X * 0.5, math.max(v.Y, -10), v.Z * 0.5)
-        end
-        ensurePredBall(tr.Position)
-        pcall(function()
-            local cam = workspace.CurrentCamera
-            if cam then cam.CFrame = CFrame.new(cam.CFrame.Position, tr.Position) end
-        end)
-        tryHitBat()
-        -- built-in anti fling / walkfling for TP bat
-        pcall(function()
-            local maxLin, maxAng = 85, 15
-            local v = root.AssemblyLinearVelocity
-            if v.Magnitude > maxLin then
-                root.AssemblyLinearVelocity = v.Unit * maxLin
-            end
-            if root.AssemblyAngularVelocity.Magnitude > maxAng then
-                root.AssemblyAngularVelocity = Vector3.zero
-            end
-            -- kill spin on limbs (walkfling)
-            for _, p in ipairs(char:GetChildren()) do
-                if p:IsA("BasePart") and p ~= root then
-                    if p.AssemblyLinearVelocity.Magnitude > maxLin * 1.1 then
-                        p.AssemblyLinearVelocity = p.AssemblyLinearVelocity.Unit * maxLin
-                    end
-                    if p.AssemblyAngularVelocity.Magnitude > maxAng then
-                        p.AssemblyAngularVelocity = Vector3.zero
-                    end
-                end
-            end
-        end)
-        applyAimbotAntiFling(root)
+        executeBatHit()
     end)
-    if mobBtnRefs.tpBat then mobBtnRefs.tpBat(true) end
 end
 
 stopTPBat=function()
-    tpBatEnabled = false  -- set FIRST so loop exits immediately
-    -- unpause auto TP only if bat aimbot is also off
-    if not autoBatEnabled then resumeAutoTP() end
+    tpBatEnabled = false
     if tpBatConn then
-        pcall(function() tpBatConn:Disconnect() end)
+        tpBatConn:Disconnect()
         tpBatConn = nil
     end
-    pcall(_tpGodDisable)
-    pcall(cleanupPredBall)
-    -- force-clear white prediction marker
-    pcall(function()
-        if _predBall then _predBall:Destroy(); _predBall = nil end
-        for _, obj in ipairs(workspace:GetChildren()) do
-            if obj.Name == "PredictionBall" then pcall(function() obj:Destroy() end) end
-        end
-    end)
-    pcall(function()
-        local char = LP.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        if root and sethiddenproperty then
-            sethiddenproperty(root, "PhysicsRepRootPart", root)
-        end
-    end)
-    pcall(function()
-        local char = LP.Character
-        local hum = char and char:FindFirstChildOfClass("Humanoid")
-        if hum then hum.AutoRotate = true end
-    end)
-    -- always update mobile button visual OFF
-    pcall(function()
-        if mobBtnRefs and mobBtnRefs.tpBat then mobBtnRefs.tpBat(false) end
-    end)
 end
-
 
 -- compat aliases (old names)
 
@@ -4521,7 +4630,7 @@ saveConfig=function()
         headlessEnabled=headlessEnabled==true,
         korbloxEnabled=korbloxEnabled==true,
             autoSwing=autoSwingEnabled==true, unwalkEnabled=unwalkEnabled==true,
-            antiLag=antiLagEnabled==true, autoTPEnabled=autoTPEnabled==true, autoTPHeight=autoTPHeight, mirrorTPDown=mirrorTPDownEnabled==true,
+            antiLag=antiLagEnabled==true, autoTPEnabled=autoTPEnabled==true, autoTPHeight=autoTPHeight, mirrorTPDown=mirrorTPDownEnabled==true, autoTPLeftEnabled=autoTPLeftEnabled==true, autoTPRightEnabled=autoTPRightEnabled==true, ragdollSyncAutoSteal=ragdollSyncAutoStealEnabled==true, antiDrop=antiDropEnabled==true, antiBat=antiBatEnabled==true,
             guiTransparencyEnabled=guiTransparencyEnabled==true,
             mobileButtonsEnabled=mobileButtonsEnabled==true, mobileButtonsLocked=mobileButtonsLocked==true,
             uiLocked=uiLocked==true,
@@ -4557,9 +4666,9 @@ local function resetAllSettings()
     NS=60;CS=30;LAGGER_SPEED=15;LAGGER_CARRY_SPEED=24.5;carrySpeedActive=false;laggerModeEnabled=false;laggerCarryActive=false
     antiRagdollEnabled=false;infJumpEnabled=false;infJumpMode="manual"
     medusaCounterEnabled=false;batCounterEnabled=false;unwalkEnabled=false
-    autoLeftEnabled=false;autoRightEnabled=false;autoBatEnabled=false;autoSwingEnabled=true;autoMoveSwingEnabled=false
+    autoLeftEnabled=false;autoRightEnabled=false;autoBatEnabled=false;autoSwingEnabled=true;autoMoveSwingEnabled=false;ragdollStealScheduleToken+=1
     autoTPEnabled=false;autoTPHeight=30;mirrorTPDownEnabled=false;antiLagEnabled=false
-    Steal.AutoStealEnabled=false;Steal.StealRadius=60;Steal.StealDuration=1.3;Steal.StealRange=10
+    autoTPLeftEnabled=true;autoTPRightEnabled=false;ragdollSyncAutoStealEnabled=false;antiDropEnabled=false;antiBatEnabled=false;    Steal.AutoStealEnabled=false;Steal.StealRadius=69.8;Steal.StealDuration=1.3;Steal.StealRange=10
     guiTransparencyEnabled=false;mobileButtonsEnabled=true;mobileButtonsSize=80
     circleButtonsEnabled=false;antiKickEnabled=false;uiLocked=false;fovValue=80;fovIndex=1
     KB.DropBrainrot={kb=nil,gp=nil};KB.AutoLeft={kb=nil,gp=nil};KB.AutoRight={kb=nil,gp=nil}
@@ -4573,7 +4682,7 @@ local function resetAllSettings()
     if mobBtnRefs.autoLeft then mobBtnRefs.autoLeft(false) end
     if mobBtnRefs.autoRight then mobBtnRefs.autoRight(false) end
     if mobBtnRefs.autoBat then mobBtnRefs.autoBat(false) end
-    stopBatAimbot();stopAutoSteal();stopAutoLeft();stopAutoRight();stopAntiRagdoll();stopAutoTP();stopHoldInfJump()
+    stopBatAimbot();stopAutoSteal();stopAutoLeft();stopAutoRight();stopAutoTPLeft();stopAutoTPRight();stopAntiRagdoll();stopAutoTP();stopHoldInfJump();disableAntiDrop();stopAntiBat()
     if antiLagEnabled then disableAntiLag() end;saveConfig()
 end
 setInstaGrab,setInfJumpVisual,setAntiRagVisual,setMedusaVisual,setUnwalkVisual,setAntiLagVisual,setAutoSwingVisual=nil,nil,nil,nil,nil,nil,nil
@@ -4922,7 +5031,7 @@ end)
 local _noPlayerColConn = nil
 local _noPlayerColHB = nil
 local function applyNoPlayerCollision()
-    -- NEVER change local character CollisionGroup Ã¢â‚¬â€ that can break floor collision.
+    -- NEVER change local character CollisionGroup â€” that can break floor collision.
     -- Only disable collision on OTHER players' parts locally.
     pcall(function()
         local function stripOther(char)
@@ -5145,7 +5254,7 @@ task.spawn(function()
 end)
 
 local function applyK7Fingerprint()
-    -- Local-only fingerprint (no character StringValues/Billboards Ã¢â‚¬â€ those replicate and can trigger PC anti-cheat)
+    -- Local-only fingerprint (no character StringValues/Billboards â€” those replicate and can trigger PC anti-cheat)
     pcall(function()
         LP.CameraMaxZoomDistance = K7_ZOOM_MAX
         LP.CameraMinZoomDistance = K7_ZOOM_MIN
@@ -5886,6 +5995,7 @@ end
 
 local function destroyMobileButtons()
     pcall(saveBtnPositions) -- persist before destroy
+    if mobViewportConn then pcall(function() mobViewportConn:Disconnect() end);mobViewportConn=nil end
     if mobGuiRef then pcall(function() mobGuiRef:Destroy() end);mobGuiRef=nil end
     for _,n in ipairs({"K7MobileButtons"}) do
         local old=game:GetService("CoreGui"):FindFirstChild(n);if old then old:Destroy() end
@@ -5910,7 +6020,8 @@ local function buildMobileButtons()
     -- Row3: TP DOWN      | CARRY SPD
     -- Row4: LAGGER MODE  | LAGGER CARRY
     -- Row5: TP BAT
-    -- Row6: INSTA RESET
+    -- Row6: INSTA RESET      | AUTO TP LEFT
+    -- Row7: AUTO TP RIGHT
     local buttons={
         {key="drop",        label="DROP\nBR",       toggle=false, exclusive=false},
         {key="autoLeft",    label="AUTO\nLEFT",     toggle=true,  exclusive=true},
@@ -5922,6 +6033,8 @@ local function buildMobileButtons()
         {key="laggerCarry", label="LAGGER\nCARRY",  toggle=true,  exclusive=false},
         {key="tpBat",       label="TP\nBAT",        toggle=true,  exclusive=false},
         {key="instaReset",  label="INSTA RESET",     toggle=false, exclusive=false},
+        {key="autoTPLeft",  label="AUTO TP\nLEFT",    toggle=true,  exclusive=true},
+        {key="autoTPRight", label="AUTO TP\nRIGHT",   toggle=true,  exclusive=true},
     }
 
     local COLS=2
@@ -5939,7 +6052,7 @@ local function buildMobileButtons()
     local panelYO=savedPanel and savedPanel.yo or defPanelY
 
     local mobGui=Instance.new("ScreenGui")
-    mobGui.Name="K7MobileButtons";mobGui.ResetOnSpawn=false;mobGui.DisplayOrder=15;mobGui.IgnoreGuiInset=true
+    mobGui.Name="K7MobileButtons";mobGui.ResetOnSpawn=false;mobGui.DisplayOrder=9999;mobGui.IgnoreGuiInset=true;mobGui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
     parentGui(mobGui)
     mobGuiRef=mobGui
 
@@ -5999,24 +6112,32 @@ local function buildMobileButtons()
         local localX=PAD+col*(BTN_SIZE+BTN_GAP)
         local localY=PAD+rowN*(BTN_SIZE+BTN_GAP)
 
-        -- Position: saved absolute pixels, OR default grid pinned to RIGHT edge
+        -- Position: saved absolute pixels, OR default grid pinned to RIGHT edge.
+        -- Every button is clamped to the actual viewport so it can NEVER spawn off-screen.
         local frameParent=perButtonDragEnabled and mobGui or panel
         local frame=Instance.new("Frame",frameParent)
         frame.Name="MobBtn_"..def.key
         frame.Size=UDim2.new(0,BTN_SIZE,0,BTN_SIZE)
-        local sp = (not forceDefaultBtnPos) and savedPositions[def.key] or nil
         local cam = workspace.CurrentCamera
         local vpX = (cam and cam.ViewportSize.X) or 800
         local vpY = (cam and cam.ViewportSize.Y) or 600
-        -- only use saved pos if on the right half (rejects old broken left saves)
-        if sp and tonumber(sp.xo)~=nil and tonumber(sp.yo)~=nil and tonumber(sp.xo) > vpX*0.35 then
-            frame.Position = UDim2.new(0,tonumber(sp.xo),0,tonumber(sp.yo))
-        else
-            -- neat grid on the RIGHT using pure offsets (no scale = no drag jump)
-            local xo = vpX - (totalW + PAD + 18) + localX
-            local yo = math.max(10, vpY/2 - (totalH+PAD*2)/2) + localY
-            frame.Position = UDim2.new(0,xo,0,yo)
+        local MIN_EDGE=6
+        local maxX=math.max(MIN_EDGE,vpX-BTN_SIZE-MIN_EDGE)
+        local maxY=math.max(MIN_EDGE,vpY-BTN_SIZE-MIN_EDGE)
+        local function clampXY(x,y)
+            x=math.clamp(tonumber(x) or MIN_EDGE,MIN_EDGE,maxX)
+            y=math.clamp(tonumber(y) or MIN_EDGE,MIN_EDGE,maxY)
+            return x,y
         end
+        local sp = (not forceDefaultBtnPos) and savedPositions[def.key] or nil
+        local xo,yo
+        if sp and tonumber(sp.xo)~=nil and tonumber(sp.yo)~=nil then
+            xo,yo=clampXY(sp.xo,sp.yo)
+        else
+            -- Neat grid on the RIGHT using pure offsets.
+            xo,yo=clampXY(vpX-(totalW+PAD+18)+localX,math.max(10,vpY/2-(totalH+PAD*2)/2)+localY)
+        end
+        frame.Position=UDim2.new(0,xo,0,yo)
         frame.BackgroundColor3=BTN_BG_OFF
         frame.BackgroundTransparency=0.05
         frame.BorderSizePixel=0;frame.Active=true;frame.ZIndex=102
@@ -6106,20 +6227,28 @@ local function buildMobileButtons()
             if def.key=="drop" then local d=armDrop();runDrop(d);flash();return end
 
             if def.exclusive then
-                local alreadyOn=(def.key=="autoLeft" and autoLeftEnabled) or (def.key=="autoRight" and autoRightEnabled) or (def.key=="autoBat" and autoBatEnabled) 
+                local alreadyOn=(def.key=="autoLeft" and autoLeftEnabled) or (def.key=="autoRight" and autoRightEnabled) or (def.key=="autoBat" and autoBatEnabled) or (def.key=="autoTPLeft" and autoTPLeftEnabled) or (def.key=="autoTPRight" and autoTPRightEnabled) 
                 if alreadyOn then
                     if def.key=="autoLeft" then autoLeftEnabled=false;stopAutoLeft();if autoLeftSetVisual then autoLeftSetVisual(false) end;setOn(false)
                     elseif def.key=="autoRight" then autoRightEnabled=false;stopAutoRight();if autoRightSetVisual then autoRightSetVisual(false) end;setOn(false)
                     elseif def.key=="autoBat" then stopBatAimbot();if autoBatSetVisual then autoBatSetVisual(false) end;setOn(false)
+                    elseif def.key=="autoTPLeft" then autoTPLeftEnabled=false;stopAutoTPLeft();if autoTPLeftSetVisual then autoTPLeftSetVisual(false) end;setOn(false)
+                    elseif def.key=="autoTPRight" then autoTPRightEnabled=false;stopAutoTPRight();if autoTPRightSetVisual then autoTPRightSetVisual(false) end;setOn(false)
                                         end
                     return
                 end
-                if autoLeftEnabled and def.key~="autoLeft" then autoLeftEnabled=false;stopAutoLeft();if autoLeftSetVisual then autoLeftSetVisual(false) end;if mobBtnRefs.autoLeft then mobBtnRefs.autoLeft(false) end end
-                if autoRightEnabled and def.key~="autoRight" then autoRightEnabled=false;stopAutoRight();if autoRightSetVisual then autoRightSetVisual(false) end;if mobBtnRefs.autoRight then mobBtnRefs.autoRight(false) end end
-                if autoBatEnabled and def.key~="autoBat" then stopBatAimbot();if autoBatSetVisual then autoBatSetVisual(false) end;if mobBtnRefs.autoBat then mobBtnRefs.autoBat(false) end end
+                if def.key~="autoLeft" and def.key~="autoRight" and def.key~="autoTPLeft" and def.key~="autoTPRight" and autoLeftEnabled then autoLeftEnabled=false;stopAutoLeft();if autoLeftSetVisual then autoLeftSetVisual(false) end;if mobBtnRefs.autoLeft then mobBtnRefs.autoLeft(false) end end
+                if def.key~="autoLeft" and def.key~="autoRight" and def.key~="autoTPLeft" and def.key~="autoTPRight" and autoRightEnabled then autoRightEnabled=false;stopAutoRight();if autoRightSetVisual then autoRightSetVisual(false) end;if mobBtnRefs.autoRight then mobBtnRefs.autoRight(false) end end
+                if autoBatEnabled and def.key~="autoBat" and def.key~="autoTPLeft" and def.key~="autoTPRight" then stopBatAimbot();if autoBatSetVisual then autoBatSetVisual(false) end;if mobBtnRefs.autoBat then mobBtnRefs.autoBat(false) end end
                                 if def.key=="autoLeft" then autoLeftEnabled=true;if safeModeTryStart and not safeModeTryStart() then return end;startAutoLeft();if autoLeftSetVisual then autoLeftSetVisual(true) end;setOn(true)
                 elseif def.key=="autoRight" then autoRightEnabled=true;if safeModeTryStart and not safeModeTryStart() then return end;startAutoRight();if autoRightSetVisual then autoRightSetVisual(true) end;setOn(true)
                 elseif def.key=="autoBat" then queueAutoBatStart();if autoBatSetVisual then autoBatSetVisual(true) end;setOn(true)
+                elseif def.key=="autoTPLeft" then
+                    if autoTPRightEnabled then autoTPRightEnabled=false;stopAutoTPRight();if autoTPRightSetVisual then autoTPRightSetVisual(false) end;if mobBtnRefs.autoTPRight then mobBtnRefs.autoTPRight(false) end end
+                    autoTPLeftEnabled=true;startAutoTPLeft();if autoTPLeftSetVisual then autoTPLeftSetVisual(true) end;setOn(true)
+                elseif def.key=="autoTPRight" then
+                    if autoTPLeftEnabled then autoTPLeftEnabled=false;stopAutoTPLeft();if autoTPLeftSetVisual then autoTPLeftSetVisual(false) end;if mobBtnRefs.autoTPLeft then mobBtnRefs.autoTPLeft(false) end end
+                    autoTPRightEnabled=true;startAutoTPRight();if autoTPRightSetVisual then autoTPRightSetVisual(true) end;setOn(true)
                                 end
                 return
             end
@@ -6148,10 +6277,25 @@ local function buildMobileButtons()
         end)
     end
 
+    -- Re-clamp/rebuild on device rotation or viewport changes so the mobile buttons
+    -- (including AUTO TP RIGHT) never disappear beyond the screen edges.
+    local camera=workspace.CurrentCamera
+    if camera then
+        mobViewportConn=camera:GetPropertyChangedSignal("ViewportSize"):Connect(function()
+            if mobileButtonsEnabled and mobGuiRef==mobGui then
+                task.defer(function()
+                    if mobileButtonsEnabled and mobGuiRef==mobGui then buildMobileButtons() end
+                end)
+            end
+        end)
+    end
+
     -- Sync initial states
     if mobBtnRefs.autoLeft then mobBtnRefs.autoLeft(autoLeftEnabled) end
     if mobBtnRefs.autoRight then mobBtnRefs.autoRight(autoRightEnabled) end
     if mobBtnRefs.autoBat then mobBtnRefs.autoBat(autoBatEnabled) end
+    if mobBtnRefs.autoTPLeft then mobBtnRefs.autoTPLeft(autoTPLeftEnabled) end
+    if mobBtnRefs.autoTPRight then mobBtnRefs.autoTPRight(autoTPRightEnabled) end
     if mobBtnRefs.tpBat then mobBtnRefs.tpBat(tpBatEnabled) end
     if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
     if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
@@ -6738,6 +6882,10 @@ local function buildGui()
         end)
     end
     setAntiRagVisual=mkToggle(pg,"Anti Ragdoll",function(on) antiRagdollEnabled=on;if on then startAntiRagdoll() else stopAntiRagdoll() end;saveConfig() end)
+    local setAntiDropVisual=mkToggle(pg,"Anti Drop",function(on) antiDropEnabled=on==true;if on then enableAntiDrop() else disableAntiDrop() end;saveConfig() end)
+    if setAntiDropVisual then setAntiDropVisual(antiDropEnabled==true) end
+    setAntiBatVisual=mkToggle(pg,"Anti Bat",function(on) antiBatEnabled=on==true;if antiBatEnabled then startAntiBat() else stopAntiBat() end;saveConfig() end)
+    if setAntiBatVisual then setAntiBatVisual(antiBatEnabled==true) end
     -- Anti Fling is always-on (built into aimbot + global clamp); no toggle
     setBatCounterVisual=mkToggle(pg,"Bat Counter",function(on) batCounterEnabled=on;if on then startBatCounter() else stopBatCounter() end;saveConfig() end)
     setMedusaVisual=mkToggle(pg,"Medusa Counter",function(on) medusaCounterEnabled=on;if on then setupMedusa(LP.Character) else stopMedusaCounter() end;saveConfig() end)
@@ -6812,7 +6960,7 @@ local function buildGui()
             if Steal.StealMode == "semi" then
                 Steal.StealRange = Steal.StealRange or 10
             else
-                if not Steal.StealRadius or Steal.StealRadius < 20 then Steal.StealRadius = 60 end
+                if not Steal.StealRadius or Steal.StealRadius < 20 then Steal.StealRadius = 70.3 end
             end
             Steal.StealDuration = Steal.StealDuration or 1.3
             saveConfig()
@@ -6846,6 +6994,18 @@ local function buildGui()
         local clk=Instance.new("TextButton",pill)
         clk.Size=UDim2.new(1,0,1,0);clk.BackgroundTransparency=1;clk.Text="";clk.ZIndex=11
         clk.Activated:Connect(toggleSteal)
+    end
+
+    do
+        local row=mkRow(pg,30);mkLabel(row,"Ragdoll Sync")
+        local pill=Instance.new("Frame",row);pill.Size=UDim2.new(0,40,0,20);pill.Position=UDim2.new(1,-50,0.5,-10);pill.BackgroundColor3=OFF;pill.BorderSizePixel=0;pill.ZIndex=9;Instance.new("UICorner",pill).CornerRadius=UDim.new(1,0)
+        local ps=Instance.new("UIStroke",pill);ps.Color=ROW_BORDER;ps.Thickness=1;ps.Transparency=0.45
+        local dot=Instance.new("Frame",pill);dot.Size=UDim2.new(0,14,0,14);dot.Position=UDim2.new(0,3,0.5,-7);dot.BackgroundColor3=GRAY;dot.BorderSizePixel=0;dot.ZIndex=10;Instance.new("UICorner",dot).CornerRadius=UDim.new(1,0)
+        local on=ragdollSyncAutoStealEnabled
+        local function sv(v) on=v;animPill(pill,dot,v) end
+        setRagdollSyncVisual=sv;sv(on)
+        local clk=Instance.new("TextButton",pill);clk.Size=UDim2.new(1,0,1,0);clk.BackgroundTransparency=1;clk.Text="";clk.ZIndex=11
+        clk.Activated:Connect(function() on=not on;sv(on);ragdollSyncAutoStealEnabled=on;saveConfig() end)
     end
 
     -- ===== VISUAL =====
@@ -6928,6 +7088,8 @@ local function buildGui()
                     if setMobVisual then setMobVisual(mobileButtonsEnabled) end
                     if mobBtnRefs.autoLeft then mobBtnRefs.autoLeft(autoLeftEnabled) end
                     if mobBtnRefs.autoRight then mobBtnRefs.autoRight(autoRightEnabled) end
+                    if mobBtnRefs.autoTPLeft then mobBtnRefs.autoTPLeft(autoTPLeftEnabled) end
+                    if mobBtnRefs.autoTPRight then mobBtnRefs.autoTPRight(autoTPRightEnabled) end
                     if mobBtnRefs.autoBat then mobBtnRefs.autoBat(autoBatEnabled) end
                                         if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
                     if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
@@ -7234,6 +7396,11 @@ local function loadConfigKeys()
     if cfg.stealMode then Steal.StealMode=(cfg.stealMode=="semi") and "semi" or "normal" end
     if cfg.autoTPHeight then autoTPHeight=cfg.autoTPHeight end
     if cfg.mirrorTPDown~=nil then mirrorTPDownEnabled=cfg.mirrorTPDown==true end
+    if cfg.autoTPLeftEnabled~=nil then autoTPLeftEnabled=cfg.autoTPLeftEnabled==true end
+    if cfg.autoTPRightEnabled~=nil then autoTPRightEnabled=cfg.autoTPRightEnabled==true end
+    if cfg.ragdollSyncAutoSteal~=nil then ragdollSyncAutoStealEnabled=cfg.ragdollSyncAutoSteal==true end
+    if cfg.antiDrop~=nil then antiDropEnabled=cfg.antiDrop==true end
+    if cfg.antiBat~=nil then antiBatEnabled=cfg.antiBat==true end
     if cfg.autoSwing~=nil then autoSwingEnabled=cfg.autoSwing==true end
     if cfg.guiTransparencyEnabled~=nil then guiTransparencyEnabled=cfg.guiTransparencyEnabled end
     if cfg.mobileButtonsEnabled~=nil then mobileButtonsEnabled=cfg.mobileButtonsEnabled end
@@ -7306,6 +7473,9 @@ local function loadConfigState()
         if cfg.unwalkEnabled then unwalkEnabled=true;if setUnwalkVisual then setUnwalkVisual(true) end;task.spawn(function() task.wait(0.5);startUnwalk() end) end
         if cfg.antiLag then enableAntiLag();if setAntiLagVisual then setAntiLagVisual(true) end end
         if cfg.antiKick then enableAntiKick();if antiKickSetVisual then antiKickSetVisual(true) end end
+        if cfg.antiDrop then enableAntiDrop() end
+        if cfg.antiBat then antiBatEnabled=true;if setAntiBatVisual then setAntiBatVisual(true) end;startAntiBat() end
+        if setRagdollSyncVisual then setRagdollSyncVisual(ragdollSyncAutoStealEnabled) end
         if cfg.safeMode then safeModeEnabled=true;enableSafeMode();if setSafeModeVisual then setSafeModeVisual(true) end end
         if circleButtonsEnabled and setCircleBtnsVisual then setCircleBtnsVisual(true) end
         if cfg.skyTheme then K7ApplyCustomSky(cfg.skyTheme) end
@@ -7479,6 +7649,9 @@ task.spawn(function()
     end)
 end)
     loadConfigState()
+    if autoTPLeftEnabled and not autoTPRightEnabled then startAutoTPLeft() end
+    if autoTPRightEnabled and not autoTPLeftEnabled then startAutoTPRight() end
+    if antiDropEnabled then enableAntiDrop() end
     K7ApplyCustomSky(currentSkyTheme)
 end)
 if not _okInit then
