@@ -1,15 +1,26 @@
+-- ============================================================
+-- ULTIMATE KEYWORD-TRIGGERED CODE SNIPER v3.0
+-- With Massive Database, AI Fallback & Performance Optimizations
+-- ============================================================
+
 local cloneref = cloneref or function(object) return object end
 local Players           = cloneref(game:GetService("Players"))
 local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
 local RunService        = cloneref(game:GetService("RunService"))
 local UserInputService  = cloneref(game:GetService("UserInputService"))
 local HttpService       = cloneref(game:GetService("HttpService"))
+local Lighting          = cloneref(game:GetService("Lighting"))
+local Workspace         = cloneref(game:GetService("Workspace"))
+local TweenService      = cloneref(game:GetService("TweenService"))
+local Stats             = cloneref(game:GetService("Stats"))
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 if getgenv and getgenv().StopAura then pcall(getgenv().StopAura) end
 
--- CONFIGURATION SYSTEM --
+-- ============================================================
+-- CONFIGURATION SYSTEM
+-- ============================================================
 local CONFIG_FILE = "ace_code_sniper_auto_redeem_test_config.json"
 local savedConfig = {
     codeSniper = true,
@@ -19,19 +30,19 @@ local savedConfig = {
     riddleSolver = true,
     spamRedeem = true,
     autoRedeemRiddles = true,
+    ultraFast = true,
+    performanceMode = true,
+    triggers = {"code is", "use code", "riddle is"},
 }
 pcall(function()
-    if type(isfile) == "function" and type(readfile) == "function"
-    and isfile(CONFIG_FILE) then
+    if type(isfile) == "function" and type(readfile) == "function" and isfile(CONFIG_FILE) then
         local decoded = HttpService:JSONDecode(readfile(CONFIG_FILE))
         if type(decoded) == "table" then
-            if type(decoded.codeSniper) == "boolean" then savedConfig.codeSniper = decoded.codeSniper end
-            if type(decoded.autoSubmit) == "boolean" then savedConfig.autoSubmit = decoded.autoSubmit end
-            if type(decoded.submitAfter) == "number" then savedConfig.submitAfter = math.max(1, math.floor(decoded.submitAfter)) end
-            if type(decoded.retypeInvalid) == "boolean" then savedConfig.retypeInvalid = decoded.retypeInvalid end
-            if type(decoded.riddleSolver) == "boolean" then savedConfig.riddleSolver = decoded.riddleSolver end
-            if type(decoded.spamRedeem) == "boolean" then savedConfig.spamRedeem = decoded.spamRedeem end
-            if type(decoded.autoRedeemRiddles) == "boolean" then savedConfig.autoRedeemRiddles = decoded.autoRedeemRiddles end
+            for k, v in pairs(decoded) do
+                if savedConfig[k] ~= nil then
+                    if type(v) == type(savedConfig[k]) then savedConfig[k] = v end
+                end
+            end
         end
     end
 end)
@@ -39,19 +50,13 @@ end)
 local function saveConfig()
     if type(writefile) ~= "function" then return end
     pcall(function()
-        writefile(CONFIG_FILE, HttpService:JSONEncode({
-            codeSniper = savedConfig.codeSniper,
-            autoSubmit = savedConfig.autoSubmit,
-            submitAfter = savedConfig.submitAfter,
-            retypeInvalid = savedConfig.retypeInvalid,
-            riddleSolver = savedConfig.riddleSolver,
-            spamRedeem = savedConfig.spamRedeem,
-            autoRedeemRiddles = savedConfig.autoRedeemRiddles,
-        }))
+        writefile(CONFIG_FILE, HttpService:JSONEncode(savedConfig))
     end)
 end
 
--- STATE VARIABLES --
+-- ============================================================
+-- STATE VARIABLES
+-- ============================================================
 local _enabled              = savedConfig.codeSniper
 local _seen                 = {}
 local _focused              = nil
@@ -72,236 +77,367 @@ local _pendingRejectedText  = nil
 local _pendingRejectedBox   = nil
 local _pendingRejectedUntil = 0
 local _pendingRejectedToken = 0
-local ACE_CASE_MODE         = "EXACT"
-local ACE_WORD_COUNT        = 1
+local _triggers             = savedConfig.triggers or {"code is", "use code", "riddle is"}
+local _isActive             = false
+local _triggerUsed          = ""
+local _ultraFast            = savedConfig.ultraFast
+local _waitTime             = _ultraFast and 0.001 or 0.05
 
 local getupvalues = (debug and debug.getupvalues) or getupvalues
 local getconns    = getconnections or (debug and debug.getconnections)
 local setupv      = (debug and debug.setupvalue) or setupvalue
 
--- AI RIDDLE SOLVER (FALLBACK ONLY) --
-local httpRequest   = (syn and syn.request) or (http and http.request) or request or http_request
-local RIDDLE_URL    = "https://sab-riddle-solver.xyrcheatz.workers.dev"
-local RIDDLE_TOKEN  = "0facce8d7ac3a4b6fc4b6ae068b3b219883009780cb2ca31"
-local RIDDLE_MODEL  = "qwen"
-local _solving      = 0
-local _solvedCount  = 0
-local _lastTypedSeq = 0
-local _riddleSeq    = 0
-local _aiFallbackUsed = 0
+-- ============================================================
+-- PERFORMANCE / NETWORK OPTIMIZATIONS
+-- ============================================================
 
-local _currentRiddleAnswer = ""
-local _answerLabel = nil
-local _answerFrame = nil
+-- Cache frequently used services for speed
+local _settings = settings()
+local _rendering = _settings.Rendering
+local _lighting = Lighting
+local _workspace = Workspace
+
+local function applyPerformanceSettings()
+    if not savedConfig.performanceMode then return end
+    
+    -- Graphics Quality
+    pcall(function()
+        _rendering.QualityLevel = Enum.QualityLevel.Level01
+    end)
+    
+    -- Disable shadows globally
+    _lighting.GlobalShadows = false
+    _lighting.Technology = Enum.Technology.Legacy
+    _lighting.Brightness = 1
+    _lighting.EnvironmentDiffuseScale = 0
+    _lighting.EnvironmentSpecularScale = 0
+    
+    -- Disable post-processing effects
+    for _, effect in pairs(_lighting:GetChildren()) do
+        if effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect") or 
+           effect:IsA("ColorCorrectionEffect") or effect:IsA("BloomEffect") or 
+           effect:IsA("DepthOfFieldEffect") then
+            effect.Enabled = false
+        end
+    end
+    
+    -- Disable particles and effects in workspace
+    for _, v in ipairs(_workspace:GetDescendants()) do
+        if v:IsA("ParticleEmitter") or v:IsA("Trail") or v:IsA("Beam") or 
+           v:IsA("Fire") or v:IsA("Smoke") then
+            v.Enabled = false
+        end
+        if v:IsA("BasePart") then
+            v.Material = Enum.Material.Plastic
+            v.Reflectance = 0
+            v.CastShadow = false
+        end
+    end
+    
+    -- Streaming optimization
+    _workspace.StreamingEnabled = true
+    _workspace.StreamingRadius = 50
+    _workspace.StreamingTargetRadius = 80
+    
+    -- Mobile-specific optimizations
+    if UserInputService.TouchEnabled then
+        pcall(function()
+            _rendering.ResolutionScale = 0.7
+        end)
+    end
+    
+    -- Reduce physics load if possible
+    pcall(function()
+        _workspace.Gravity = _workspace.Gravity -- keep same
+        _workspace.FallenPartsDestroyHeight = -500
+    end)
+    
+    setStatus("⚡ Performance mode ON", COLORS.Green)
+end
+
+local function revertPerformanceSettings()
+    pcall(function()
+        _rendering.QualityLevel = Enum.QualityLevel.Level06
+        _lighting.GlobalShadows = true
+        _lighting.Technology = Enum.Technology.Future
+        _workspace.StreamingEnabled = false
+        _rendering.ResolutionScale = 1
+    end)
+    setStatus("Performance mode OFF (revert may require restart)", COLORS.Red)
+end
+
+-- ============================================================
+-- MASSIVE OPTIMIZED DATABASE
+-- ============================================================
+
+-- Brainrot database organized by category for efficiency
+local BRAINROT_DB = {
+    -- Brainrot Gods (82 documented)
+    Gods = {
+        "Dumborino Miracello", "Eggdin Egg Egg Dun", "Clovkur Kurkur", "Karkerheart Luvkur",
+        "Pop Pop Sahur", "Dolphini Jetskini", "Pandanini Frostini", "Ginger Cisterna",
+        "Tentacolo Tecnico", "Cocoa Assassino", "Belula Beluga", "Skull Skull Skull",
+        "Krupuk Pagi Pagi", "Patteo", "Bunny Tralala", "Cappuccino Clownino",
+        "Brasilini Berimbini", "Luv Luv Luv", "Astrolero Cervalero", "Noo La Polizia",
+        "Anpali Babel", "Chrismasmamat", "Mastodontico Telepiedone", "Bambu Bambu Sahur",
+        "Los Gattitos", "Boba Panda", "Piccionetta Machina", "Squalanana",
+        "Frio Ninja", "Los Tipi Tacos", "Tootini Shrimpini", "Granchiello Spiritell",
+        "Yeti Claus", "Ginger Globo", "Snailenzo", "Mummy Ambalabu",
+        "Corn Corn Corn Sahur", "Tartaruga Cisterna", "Aquanaut", "Orcalita Orcala",
+        "Cacasito Satalito", "Los Orcalitos", "Crabbo Limonetta", "Tractoro Dinosauro",
+        "Bombardini Tortinii", "Piccione Macchina", "Pakrahmatmatina", "Brr es Teh Patipum",
+        "Los Bombinitos", "Pakrahmatmamat", "Ballerina Peppermintina", "Los Tungtungtungcitos",
+        "Bulbito Bandito Traktorito", "Ballerino Lololo", "Las Capuchinas", "Trippi Troppi Troppa Trippa",
+        "Gattito Tacoto", "Los Chihuaninis", "Divino Platypio", "Capi Taco",
+        "Trenostruzzo Turbo 3000", "Urubini Flamenguini", "Jacko Jack Jack", "Extinct Ballerina",
+        "Vampira Cappucina", "Orcalero Orcala", "Tukanno Bananno", "Tralalita Tralala",
+        "Alessio", "Tipi Topi Taco", "Matteo", "Tralalero Tralala",
+        "Cocofanto Elefanto", "Girafa Celestre", "Tartaruga Cisterna",
+    },
+    -- Secret Brainrots
+    Secrets = {
+        "Festive 67", "Strawberry Elephant", "Dragon Cannelloni", "Garama",
+        "Madundung", "Spaghetti Tualetti", "Meowl", "Extinct Tralalero",
+        "Extinct Matteo",
+    },
+    -- Mythic Brainrots
+    Mythic = {
+        "Tracoducotulu Delapeladustuz", "Carloo", "Carrotini Brainini",
+    },
+    -- Epic/Legendary Brainrots
+    Epic = {
+        "Gelatina Volatina", "Skibidi", "Rocketini Frostini", "Frullato Framingo",
+        "Kraken", "Octo Lucky Block", "Christmas Llama Rot", "Cerberus",
+        "Strawberry Elephant", "Dragon Cannelloni", "Garama", "Madundung",
+    },
+    -- Rare/Common Brainrots
+    Rare = {
+        "Spaghetti Tualetti", "Meowl", "Extinct Tralalero", "Extinct Matteo",
+    }
+}
+
+-- Build efficient lookup tables
+local BRAINROT_LOOKUP = {}
+local BRAINROT_PATTERNS = {}
+
+-- Add all brainrots to lookup with multiple variations
+for category, names in pairs(BRAINROT_DB) do
+    for _, name in ipairs(names) do
+        local lower = name:lower()
+        -- Exact match
+        BRAINROT_LOOKUP[lower] = name
+        -- Remove spaces
+        local noSpace = lower:gsub("%s+", "")
+        BRAINROT_LOOKUP[noSpace] = name
+        -- Remove common suffixes
+        local clean = lower:gsub("%s+", ""):gsub("s$", ""):gsub("e$", "")
+        if clean ~= noSpace then
+            BRAINROT_LOOKUP[clean] = name
+        end
+        -- Store pattern for partial matching
+        if #lower > 5 then
+            local firstWord = lower:match("^(%S+)")
+            if firstWord then
+                BRAINROT_PATTERNS[firstWord] = name
+            end
+        end
+    end
+end
+
+-- ============================================================
+-- RIDDLE DATABASE (Optimized)
+-- ============================================================
+
+-- Organized by category for faster lookups
+local RIDDLE_DB = {
+    Colors = {
+        {pattern = "color of sky|sky color", answer = "blue"},
+        {pattern = "color of grass|grass color", answer = "green"},
+        {pattern = "color of sun|sun color", answer = "yellow"},
+        {pattern = "color of blood|blood color", answer = "red"},
+        {pattern = "color of snow|snow color", answer = "white"},
+        {pattern = "color of night|night color", answer = "black"},
+        {pattern = "color of ocean|ocean color", answer = "blue"},
+        {pattern = "color of fire|fire color", answer = "orange"},
+        {pattern = "color of banana|banana color", answer = "yellow"},
+        {pattern = "color of orange|orange color", answer = "orange"},
+        {pattern = "color of lemon|lemon color", answer = "yellow"},
+        {pattern = "color of lime|lime color", answer = "green"},
+        {pattern = "color of eggplant|eggplant color", answer = "purple"},
+        {pattern = "color of coal|coal color", answer = "black"},
+        {pattern = "color of milk|milk color", answer = "white"},
+        {pattern = "color of chocolate|chocolate color", answer = "brown"},
+        {pattern = "color of pumpkin|pumpkin color", answer = "orange"},
+        {pattern = "color of ruby|ruby color", answer = "red"},
+        {pattern = "color of emerald|emerald color", answer = "green"},
+        {pattern = "color of sapphire|sapphire color", answer = "blue"},
+        {pattern = "color of gold|gold color", answer = "yellow"},
+        {pattern = "color of silver|silver color", answer = "gray"},
+    },
+    Numbers = {
+        {pattern = "how many legs does a dog", answer = "4"},
+        {pattern = "how many legs does a cat", answer = "4"},
+        {pattern = "how many legs does a spider", answer = "8"},
+        {pattern = "how many legs does an insect", answer = "6"},
+        {pattern = "how many legs does a human", answer = "2"},
+        {pattern = "how many legs does a bird", answer = "2"},
+        {pattern = "how many eyes does a human", answer = "2"},
+        {pattern = "how many eyes does a spider", answer = "8"},
+        {pattern = "how many days in a week", answer = "7"},
+        {pattern = "how many days in a year", answer = "365"},
+        {pattern = "how many hours in a day", answer = "24"},
+        {pattern = "how many minutes in an hour", answer = "60"},
+        {pattern = "how many seconds in a minute", answer = "60"},
+        {pattern = "how many months in a year", answer = "12"},
+        {pattern = "how many planets in solar system", answer = "8"},
+        {pattern = "how many continents", answer = "7"},
+        {pattern = "how many sides does a triangle", answer = "3"},
+        {pattern = "how many sides does a square", answer = "4"},
+        {pattern = "how many sides does a pentagon", answer = "5"},
+        {pattern = "how many sides does a hexagon", answer = "6"},
+        {pattern = "how many sides does an octagon", answer = "8"},
+        {pattern = "how many letters in alphabet", answer = "26"},
+        {pattern = "how many vowels", answer = "5"},
+        {pattern = "how many zeros in a million", answer = "6"},
+        {pattern = "how many zeros in a billion", answer = "9"},
+    },
+    Animals = {
+        {pattern = "largest animal|biggest animal", answer = "blue whale"},
+        {pattern = "fastest animal", answer = "cheetah"},
+        {pattern = "tallest animal", answer = "giraffe"},
+        {pattern = "king of jungle", answer = "lion"},
+        {pattern = "man's best friend", answer = "dog"},
+        {pattern = "king of beasts", answer = "lion"},
+        {pattern = "animal gives milk", answer = "cow"},
+        {pattern = "animal lays eggs", answer = "chicken"},
+    },
+    Planets = {
+        {pattern = "closest planet to sun", answer = "mercury"},
+        {pattern = "largest planet", answer = "jupiter"},
+        {pattern = "planet with rings", answer = "saturn"},
+        {pattern = "red planet", answer = "mars"},
+        {pattern = "blue planet|third planet", answer = "earth"},
+    },
+    DaysMonths = {
+        {pattern = "first day of week", answer = "sunday"},
+        {pattern = "middle of week", answer = "wednesday"},
+        {pattern = "last day of week", answer = "saturday"},
+        {pattern = "first month of year", answer = "january"},
+        {pattern = "last month of year", answer = "december"},
+        {pattern = "month with 28 days", answer = "february"},
+        {pattern = "month with 31 days", answer = "january"},
+    },
+    Memes = {
+        {pattern = "brainrot meaning|what is brainrot", answer = "skibidi"},
+        {pattern = "what does sigma", answer = "sigma"},
+        {pattern = "what is gyatt", answer = "gyatt"},
+        {pattern = "what is ohio|why is ohio", answer = "ohio"},
+        {pattern = "what is rizz|rizz meaning", answer = "rizz"},
+        {pattern = "what is fanum tax", answer = "fanum"},
+        {pattern = "what is mewing", answer = "mewing"},
+        {pattern = "what is skibidi", answer = "skibidi"},
+        {pattern = "what does sus", answer = "sus"},
+        {pattern = "what is pog", answer = "pog"},
+        {pattern = "what is bet", answer = "bet"},
+        {pattern = "what is cap", answer = "cap"},
+        {pattern = "what is no cap", answer = "no cap"},
+        {pattern = "what is goated", answer = "goat"},
+    },
+    Capitals = {
+        {pattern = "capital of france", answer = "paris"},
+        {pattern = "capital of germany", answer = "berlin"},
+        {pattern = "capital of italy", answer = "rome"},
+        {pattern = "capital of spain", answer = "madrid"},
+        {pattern = "capital of uk", answer = "london"},
+        {pattern = "capital of usa", answer = "washington"},
+        {pattern = "capital of japan", answer = "tokyo"},
+        {pattern = "capital of china", answer = "beijing"},
+        {pattern = "capital of brazil", answer = "brasilia"},
+        {pattern = "capital of australia", answer = "canberra"},
+        {pattern = "capital of india", answer = "new delhi"},
+        {pattern = "capital of russia", answer = "moscow"},
+        {pattern = "capital of egypt", answer = "cairo"},
+        {pattern = "capital of canada", answer = "ottawa"},
+        {pattern = "capital of mexico", answer = "mexico city"},
+    },
+    Trivia = {
+        {pattern = "tallest building", answer = "burj khalifa"},
+        {pattern = "longest river", answer = "nile"},
+        {pattern = "highest mountain", answer = "everest"},
+        {pattern = "largest ocean", answer = "pacific"},
+        {pattern = "smallest country", answer = "vatican"},
+    },
+}
+
+-- Build efficient riddle lookup
+local RIDDLE_LOOKUP = {}
+for category, riddles in pairs(RIDDLE_DB) do
+    for _, entry in ipairs(riddles) do
+        local patterns = entry.pattern:split("|")
+        for _, pattern in ipairs(patterns) do
+            RIDDLE_LOOKUP[pattern] = entry.answer
+        end
+    end
+end
+
+-- ============================================================
+-- FAST RIDDLE SOLVER
+-- ============================================================
 
 local function normalizeCode(s)
     return (tostring(s or "")):match("^%s*(.-)%s*$") or ""
 end
 
--- ============================================================
--- MASSIVE LOCAL DATABASE (400+ Brainrots + 200+ Common Riddles)
--- Source: SABWiki (sabwiki.com)
--- ============================================================
-local BRAINROT_DB = {
-    -- Brainrot Gods (82 documented)
-    "Dumborino Miracello", "Eggdin Egg Egg Dun", "Clovkur Kurkur", "Karkerheart Luvkur",
-    "Pop Pop Sahur", "Dolphini Jetskini", "Pandanini Frostini", "Ginger Cisterna",
-    "Tentacolo Tecnico", "Cocoa Assassino", "Belula Beluga", "Skull Skull Skull",
-    "Krupuk Pagi Pagi", "Patteo", "Bunny Tralala", "Cappuccino Clownino",
-    "Brasilini Berimbini", "Luv Luv Luv", "Astrolero Cervalero", "Noo La Polizia",
-    "Anpali Babel", "Chrismasmamat", "Mastodontico Telepiedone", "Bambu Bambu Sahur",
-    "Los Gattitos", "Boba Panda", "Piccionetta Machina", "Squalanana",
-    "Frio Ninja", "Los Tipi Tacos", "Tootini Shrimpini", "Granchiello Spiritell",
-    "Yeti Claus", "Ginger Globo", "Snailenzo", "Mummy Ambalabu",
-    "Corn Corn Corn Sahur", "Tartaruga Cisterna", "Aquanaut", "Orcalita Orcala",
-    "Cacasito Satalito", "Los Orcalitos", "Crabbo Limonetta", "Tractoro Dinosauro",
-    "Bombardini Tortinii", "Piccione Macchina", "Pakrahmatmatina", "Brr es Teh Patipum",
-    "Los Bombinitos", "Pakrahmatmamat", "Ballerina Peppermintina", "Los Tungtungtungcitos",
-    "Bulbito Bandito Traktorito", "Ballerino Lololo", "Las Capuchinas", "Trippi Troppi Troppa Trippa",
-    "Gattito Tacoto", "Los Chihuaninis", "Divino Platypio", "Capi Taco",
-    "Trenostruzzo Turbo 3000", "Urubini Flamenguini", "Jacko Jack Jack", "Extinct Ballerina",
-    "Vampira Cappucina", "Orcalero Orcala", "Tukanno Bananno", "Tralalita Tralala",
-    "Alessio", "Tipi Topi Taco", "Matteo", "Tralalero Tralala",
-    "Cocofanto Elefanto", "Girafa Celestre", "Tartaruga Cisterna",
-    
-    -- Secret Brainrots
-    "Festive 67", "Strawberry Elephant", "Dragon Cannelloni", "Garama",
-    "Madundung", "Spaghetti Tualetti", "Meowl", "Extinct Tralalero",
-    "Extinct Matteo",
-    
-    -- Mythic Brainrots
-    "Tracoducotulu Delapeladustuz", "Carloo", "Carrotini Brainini",
-    
-    -- Epic/Legendary Brainrots
-    "Gelatina Volatina", "Skibidi", "Rocketini Frostini", "Frullato Framingo",
-    "Kraken", "Octo Lucky Block", "Christmas Llama Rot", "Cerberus",
-    "Strawberry Elephant", "Dragon Cannelloni", "Garama", "Madundung",
-    "Spaghetti Tualetti", "Meowl",
-}
+-- AI Fallback
+local httpRequest = (syn and syn.request) or (http and http.request) or request or http_request
+local RIDDLE_URL = "https://sab-riddle-solver.xyrcheatz.workers.dev"
+local RIDDLE_TOKEN = "0facce8d7ac3a4b6fc4b6ae068b3b219883009780cb2ca31"
+local RIDDLE_MODEL = "qwen"
 
--- Build lookup table for fast matching
-local BRAINROT_LOOKUP = {}
-for _, name in ipairs(BRAINROT_DB) do
-    local lower = name:lower()
-    BRAINROT_LOOKUP[lower] = name
-    -- Also add without spaces for matching
-    local noSpace = lower:gsub("%s+", "")
-    BRAINROT_LOOKUP[noSpace] = name
-end
+local _currentRiddleAnswer = ""
+local _answerLabel = nil
+local _G = getgenv() or _G
+if not _G._RiddleCache then _G._RiddleCache = {} end
 
--- ============================================================
--- MASSIVE LOCAL RIDDLE DATABASE
--- ============================================================
-local function localRiddleAnswer(message)
+local function fastRiddleLookup(message)
     local lower = message:lower()
     
-    -- ===== Check persistent cache first (learned from AI) =====
-    if _G._RiddleCache and _G._RiddleCache[lower] then
+    -- Check AI cache first (fastest)
+    if _G._RiddleCache[lower] then
         return _G._RiddleCache[lower]
     end
     
-    -- ===== COLORS =====
-    if lower:find("color of sky") or lower:find("sky color") then return "blue" end
-    if lower:find("color of grass") or lower:find("grass color") then return "green" end
-    if lower:find("color of sun") or lower:find("sun color") then return "yellow" end
-    if lower:find("color of blood") or lower:find("blood color") then return "red" end
-    if lower:find("color of snow") or lower:find("snow color") then return "white" end
-    if lower:find("color of night") or lower:find("night color") then return "black" end
-    if lower:find("color of ocean") or lower:find("ocean color") then return "blue" end
-    if lower:find("color of fire") or lower:find("fire color") then return "orange" end
-    if lower:find("color of banana") or lower:find("banana color") then return "yellow" end
-    if lower:find("color of orange") or lower:find("orange color") then return "orange" end
-    if lower:find("color of lemon") or lower:find("lemon color") then return "yellow" end
-    if lower:find("color of lime") or lower:find("lime color") then return "green" end
-    if lower:find("color of eggplant") or lower:find("eggplant color") then return "purple" end
-    if lower:find("color of coal") or lower:find("coal color") then return "black" end
-    if lower:find("color of milk") or lower:find("milk color") then return "white" end
-    if lower:find("color of chocolate") or lower:find("chocolate color") then return "brown" end
-    if lower:find("color of pumpkin") or lower:find("pumpkin color") then return "orange" end
-    if lower:find("color of violet") or lower:find("violet color") then return "purple" end
-    if lower:find("color of ruby") or lower:find("ruby color") then return "red" end
-    if lower:find("color of emerald") or lower:find("emerald color") then return "green" end
-    if lower:find("color of sapphire") or lower:find("sapphire color") then return "blue" end
-    if lower:find("color of amethyst") or lower:find("amethyst color") then return "purple" end
-    if lower:find("color of pearl") or lower:find("pearl color") then return "white" end
-    if lower:find("color of gold") or lower:find("gold color") then return "yellow" end
-    if lower:find("color of silver") or lower:find("silver color") then return "gray" end
-    if lower:find("color of bronze") or lower:find("bronze color") then return "brown" end
-    if lower:find("color of copper") or lower:find("copper color") then return "orange" end
+    -- Check exact pattern matches
+    for pattern, answer in pairs(RIDDLE_LOOKUP) do
+        if lower:find(pattern) then
+            return answer
+        end
+    end
     
-    -- ===== NUMBERS & MATH =====
-    if lower:find("how many legs does a dog have") then return "4" end
-    if lower:find("how many legs does a cat have") then return "4" end
-    if lower:find("how many legs does a spider have") then return "8" end
-    if lower:find("how many legs does an insect have") then return "6" end
-    if lower:find("how many legs does a human have") then return "2" end
-    if lower:find("how many legs does a bird have") then return "2" end
-    if lower:find("how many legs does a fish have") then return "0" end
-    if lower:find("how many eyes does a human have") then return "2" end
-    if lower:find("how many eyes does a spider have") then return "8" end
-    if lower:find("how many days in a week") then return "7" end
-    if lower:find("how many days in a year") then return "365" end
-    if lower:find("how many hours in a day") then return "24" end
-    if lower:find("how many minutes in an hour") then return "60" end
-    if lower:find("how many seconds in a minute") then return "60" end
-    if lower:find("how many months in a year") then return "12" end
-    if lower:find("how many planets in solar system") then return "8" end
-    if lower:find("how many continents") then return "7" end
-    if lower:find("how many sides does a triangle have") then return "3" end
-    if lower:find("how many sides does a square have") then return "4" end
-    if lower:find("how many sides does a pentagon have") then return "5" end
-    if lower:find("how many sides does a hexagon have") then return "6" end
-    if lower:find("how many sides does a heptagon have") then return "7" end
-    if lower:find("how many sides does an octagon have") then return "8" end
-    if lower:find("how many sides does a decagon have") then return "10" end
-    if lower:find("how many letters in alphabet") then return "26" end
-    if lower:find("how many vowels") or lower:find("how many vowels in alphabet") then return "5" end
-    if lower:find("how many zeros in a million") then return "6" end
-    if lower:find("how many zeros in a billion") then return "9" end
-    
-    -- ===== ANIMALS =====
-    if lower:find("largest animal") or lower:find("biggest animal") then return "blue whale" end
-    if lower:find("fastest animal") then return "cheetah" end
-    if lower:find("tallest animal") then return "giraffe" end
-    if lower:find("king of jungle") then return "lion" end
-    if lower:find("man's best friend") then return "dog" end
-    if lower:find("what animal is known as king of beasts") then return "lion" end
-    if lower:find("what animal gives milk") then return "cow" end
-    if lower:find("what animal lays eggs") then return "chicken" end
-    
-    -- ===== PLANETS / SPACE =====
-    if lower:find("closest planet to sun") then return "mercury" end
-    if lower:find("largest planet") then return "jupiter" end
-    if lower:find("planet with rings") then return "saturn" end
-    if lower:find("red planet") then return "mars" end
-    if lower:find("blue planet") or lower:find("third planet from sun") then return "earth" end
-    
-    -- ===== DAYS / MONTHS =====
-    if lower:find("first day of week") then return "sunday" end
-    if lower:find("middle of week") then return "wednesday" end
-    if lower:find("last day of week") then return "saturday" end
-    if lower:find("first month of year") then return "january" end
-    if lower:find("last month of year") then return "december" end
-    if lower:find("month with 28 days") then return "february" end
-    if lower:find("month with 31 days") then return "january" end
-    
-    -- ===== BRAINROT / GEN Z / MEME ANSWERS =====
-    if lower:find("what is the brainrot") or lower:find("brainrot meaning") then return "skibidi" end
-    if lower:find("what does sigma mean") then return "sigma" end
-    if lower:find("what is gyatt") then return "gyatt" end
-    if lower:find("what is ohio") or lower:find("why is ohio") then return "ohio" end
-    if lower:find("what is rizz") or lower:find("rizz meaning") then return "rizz" end
-    if lower:find("what is fanum tax") then return "fanum" end
-    if lower:find("what is mewing") then return "mewing" end
-    if lower:find("what is skibidi") then return "skibidi" end
-    if lower:find("what is toilet") and lower:find("skibidi") then return "skibidi toilet" end
-    if lower:find("what does sus mean") then return "sus" end
-    if lower:find("what is pog") then return "pog" end
-    if lower:find("what is bet") then return "bet" end
-    if lower:find("what is cap") then return "cap" end
-    if lower:find("what is no cap") then return "no cap" end
-    if lower:find("what is goated") then return "goat" end
-    if lower:find("what is fr") then return "fr" end
-    if lower:find("what is lol") then return "lol" end
-    if lower:find("what is lmao") then return "lmao" end
-    if lower:find("what is bruh") then return "bruh" end
-    
-    -- ===== GENERAL TRIVIA =====
-    if lower:find("what is the tallest building") then return "burj khalifa" end
-    if lower:find("what is the longest river") then return "nile" end
-    if lower:find("what is the highest mountain") then return "everest" end
-    if lower:find("what is the largest ocean") then return "pacific" end
-    if lower:find("what is the smallest country") then return "vatican" end
-    if lower:find("what is the capital of france") then return "paris" end
-    if lower:find("what is the capital of germany") then return "berlin" end
-    if lower:find("what is the capital of italy") then return "rome" end
-    if lower:find("what is the capital of spain") then return "madrid" end
-    if lower:find("what is the capital of uk") then return "london" end
-    if lower:find("what is the capital of usa") then return "washington" end
-    if lower:find("what is the capital of japan") then return "tokyo" end
-    if lower:find("what is the capital of china") then return "beijing" end
-    if lower:find("what is the capital of brazil") then return "brasilia" end
-    if lower:find("what is the capital of australia") then return "canberra" end
-    if lower:find("what is the capital of india") then return "new delhi" end
-    if lower:find("what is the capital of russia") then return "moscow" end
-    if lower:find("what is the capital of egypt") then return "cairo" end
-    if lower:find("what is the capital of canada") then return "ottawa" end
-    if lower:find("what is the capital of mexico") then return "mexico city" end
-    
-    -- ===== BRAINROT-SPECIFIC RIDDLES (from SABWiki) =====
-    -- Match brainrot names from the database
+    -- Check brainrot names
     for pattern, name in pairs(BRAINROT_LOOKUP) do
         if lower:find(pattern) then
             return name
         end
     end
     
-    -- ===== FALLBACK: Extract ANY number =====
+    -- Check brainrot first words
+    for word, name in pairs(BRAINROT_PATTERNS) do
+        if lower:find(word) then
+            return name
+        end
+    end
+    
+    -- Extract any number
     local num = lower:match("%d+")
     if num then return num end
     
-    -- ===== FALLBACK: Last word after "is/are/answer" =====
-    local after = lower:match("is%s+(%w+)$") or lower:match("are%s+(%w+)$") or lower:match("answer%s+(%w+)$") or lower:match("means%s+(%w+)$") or lower:match("called%s+(%w+)$")
+    -- Extract last word after common phrases
+    local after = lower:match("is%s+(%w+)$") or 
+                  lower:match("are%s+(%w+)$") or 
+                  lower:match("answer%s+(%w+)$") or 
+                  lower:match("means%s+(%w+)$") or 
+                  lower:match("called%s+(%w+)$")
     if after then return after end
     
     return nil
@@ -326,74 +462,52 @@ local function aiPost(path, body)
     return nil
 end
 
--- ============================================================
--- SOLVE RIDDLE WITH LOCAL DB FIRST, AI AS FALLBACK ONLY
--- ============================================================
 local function solveRiddle(message, seq)
-    _solving = _solving + 1
-    
-    -- Initialize persistent cache
-    if not _G._RiddleCache then _G._RiddleCache = {} end
+    if not _riddleSolver then return end
+    if setStatus then setStatus("Solving riddle...", COLORS and COLORS.Text or Color3.fromRGB(200,200,200)) end
     
     task.spawn(function()
-        local answer = nil
+        -- Try local DB first (instant)
+        local answer = fastRiddleLookup(message)
         local fromAI = false
-        local lower = message:lower()
         
-        -- STEP 1: Check local database (INSTANT - 0ms)
-        answer = localRiddleAnswer(message)
-        
-        -- STEP 2: If local DB fails, use AI (FALLBACK ONLY)
+        -- If not found, use AI (fallback only)
         if not answer or answer == "" then
             if setStatus then setStatus("Local DB miss, trying AI...", COLORS and COLORS.Text or Color3.fromRGB(200,200,200)) end
-            _aiFallbackUsed = _aiFallbackUsed + 1
-            
             local data = aiPost("/solve", { message = message, model = RIDDLE_MODEL, history = {} })
             if data and data.riddle == true and type(data.answers) == "table" and data.answers[1] then
                 answer = normalizeCode(data.answers[1])
                 fromAI = true
-                
-                -- Cache the AI answer for next time
                 if answer and answer ~= "" then
-                    _G._RiddleCache[lower] = answer
-                    if setStatus then setStatus("AI learned: " .. answer .. " (cached)", COLORS and COLORS.Green or Color3.fromRGB(0,255,0)) end
+                    _G._RiddleCache[message:lower()] = answer
+                    if setStatus then setStatus("AI learned: " .. answer, COLORS and COLORS.Green or Color3.fromRGB(0,255,0)) end
                 end
             end
         end
         
-        _solving = math.max(0, _solving - 1)
-        if not _enabled then return end
-
-        if answer and #answer > 0 and _riddleSolver and seq >= _lastTypedSeq then
-            _lastTypedSeq = seq
-            _solvedCount = _solvedCount + 1
+        if answer and #answer > 0 then
             _currentRiddleAnswer = answer
             if _answerLabel then
                 _answerLabel.Text = "Answer: " .. answer
             end
             if setStatus then 
-                local source = fromAI and "AI (cached for next time)" or "Local DB"
-                setStatus(source .. ": " .. answer, COLORS and COLORS.Green or Color3.fromRGB(0,255,0)) 
+                local source = fromAI and "AI (cached)" or "Local DB"
+                setStatus(source .. ": " .. answer, COLORS and COLORS.Green or Color3.fromRGB(0,255,0))
             end
             if flashCode then flashCode(answer) end
-
             if _autoRedeemRiddles then
                 typeAndSubmitCode(answer)
             end
-        elseif not answer or #answer == 0 then
+        else
             if setStatus then setStatus("No answer found for: " .. message, COLORS and COLORS.Red or Color3.fromRGB(255,0,0)) end
         end
     end)
 end
 
-local setStatus, flashCode, appendToBox
-local rememberPendingSubmission, clearPendingSubmission, handleRedemptionFeedback
-local clearAceCapture
-local _lastStatusMsg = nil
+-- ============================================================
+-- UTILITY & REDEEM LOGIC (Ultra-Fast)
+-- ============================================================
 
--- ============================================================
--- OPTIMIZED UTILITY & REDEEM LOGIC
--- ============================================================
 local function isOurGui(instance)
     local p = instance
     for _ = 1, 10 do
@@ -434,10 +548,9 @@ local function findCodeButtons(pg)
         if gui:IsA("ScreenGui") and gui.Enabled and not isOurGui(gui) then
             for _, d in ipairs(gui:GetDescendants()) do
                 if (d:IsA("TextButton") or d:IsA("ImageButton")) and not isOurGui(d) then
-                    local n  = d.Name:lower()
+                    local n = d.Name:lower()
                     local pn = (d.Parent and d.Parent.Name or ""):lower()
-                    if (n:find("code") or n:find("redeem") or pn:find("code") or pn:find("redeem"))
-                        and isVisibleChain(d) then
+                    if (n:find("code") or n:find("redeem") or pn:find("code") or pn:find("redeem")) and isVisibleChain(d) then
                         btns[#btns+1] = d
                     end
                 end
@@ -447,28 +560,14 @@ local function findCodeButtons(pg)
     return btns
 end
 
--- ============================================================
--- OPTIMIZED clickButton (stops on first success)
--- ============================================================
+-- Ultra-fast clickButton
 local function clickButton(btn)
     if not btn then return false end
-    
-    -- Method 1: firesignal (fastest, if available)
     if typeof(firesignal) == "function" then
-        if pcall(firesignal, btn.MouseButton1Click) or pcall(firesignal, btn.Activated) then
-            return true
-        end
+        if pcall(firesignal, btn.MouseButton1Click) or pcall(firesignal, btn.Activated) then return true end
     end
-    
-    -- Method 2: Direct :Fire() (almost as fast)
-    if pcall(function() btn.MouseButton1Click:Fire() end) then
-        return true
-    end
-    if pcall(function() btn.Activated:Fire() end) then
-        return true
-    end
-    
-    -- Method 3: getconnections (slower – fallback only)
+    if pcall(function() btn.MouseButton1Click:Fire() end) then return true end
+    if pcall(function() btn.Activated:Fire() end) then return true end
     if typeof(getconns) == "function" then
         local ok, cs = pcall(getconns, btn.MouseButton1Click)
         if ok and type(cs) == "table" then
@@ -483,51 +582,35 @@ local function clickButton(btn)
             end
         end
     end
-    
-    -- Method 4: fireclick (last resort)
     if typeof(fireclick) == "function" then
         return pcall(fireclick, btn)
     end
-    
     return false
 end
 
--- ============================================================
--- OPTIMIZED fireBoxFocusLost (skips heavy debug if not needed)
--- ============================================================
+-- Ultra-fast fireBoxFocusLost
 local function fireBoxFocusLost(box)
     if not box then return false end
-    
-    -- Fast path: use firesignal if available
     if typeof(firesignal) == "function" then
-        if pcall(firesignal, box.FocusLost, true) then
-            return true
-        end
+        if pcall(firesignal, box.FocusLost, true) then return true end
     end
-    
-    -- Slower fallback: only use debug if absolutely necessary
     if typeof(getconns) == "function" then
         local ok, cs = pcall(getconns, box.FocusLost)
         if ok and type(cs) == "table" then
             for _, c in ipairs(cs) do
-                pcall(function()
-                    if c.Enabled ~= false then c:Fire(true) end
-                end)
+                pcall(function() if c.Enabled ~= false then c:Fire(true) end end)
             end
             return true
         end
     end
-    
     return false
 end
 
--- ============================================================
--- OPTIMIZED typeAndSubmitCode (removed wasted waits)
--- ============================================================
+-- Ultra-fast typeAndSubmitCode
 local function typeAndSubmitCode(code)
     local pg = playerGui or player:FindFirstChildOfClass("PlayerGui")
     if not pg then return false, "no PlayerGui" end
-
+    
     -- Strategy 1: Known UI path
     local codesGui = pg:FindFirstChild("Codes")
     if codesGui then
@@ -540,7 +623,7 @@ local function typeAndSubmitCode(code)
                 if cur:IsA("GuiObject") then cur.Visible = true end
                 cur = cur.Parent
             end
-
+            
             local box = nil
             for _, d in ipairs(codesFrame:GetDescendants()) do
                 if d:IsA("TextBox") and not isOurGui(d) then
@@ -548,7 +631,7 @@ local function typeAndSubmitCode(code)
                     break
                 end
             end
-
+            
             local submitBtn = nil
             for _, d in ipairs(codesFrame:GetDescendants()) do
                 if (d:IsA("TextButton") or d:IsA("ImageButton")) and not isOurGui(d) then
@@ -572,13 +655,14 @@ local function typeAndSubmitCode(code)
                     end
                 end
             end
-
+            
             if box then
                 pcall(function() box.Text = code end)
-                task.wait(0.001)
+                if _ultraFast then task.wait(0.001) else task.wait(0.05) end
                 if submitBtn then
                     if _spamRedeem then
-                        for i = 1, 10 do
+                        local clicks = _ultraFast and 5 or 10
+                        for i = 1, clicks do
                             clickButton(submitBtn)
                             task.wait(0.001)
                         end
@@ -591,23 +675,21 @@ local function typeAndSubmitCode(code)
             end
         end
     end
-
-    -- Strategy 2: Dynamic Search (removed wasted 0.01s wait)
+    
+    -- Strategy 2: Dynamic Search (ultra-fast)
     local btns = findCodeButtons(pg)
     for _, btn in ipairs(btns) do
         clickButton(btn)
         task.wait(0.001)
     end
-
-    -- REMOVED: task.wait(0.01) -- This was wasting 10ms
-
+    
     local box = nil
-    local deadline = tick() + 2
+    local deadline = tick() + (_ultraFast and 0.3 or 2)
     while tick() < deadline do
         local allBoxes = findAllTextBoxes(pg)
         for _, d in ipairs(allBoxes) do
             if isVisibleChain(d) then
-                local n  = d.Name:lower()
+                local n = d.Name:lower()
                 local pn = (d.Parent and d.Parent.Name or ""):lower()
                 if n:find("code") or pn:find("code") or n:find("redeem") or pn:find("redeem") or n:find("input") or pn:find("textbox") or n:find("enter") then
                     box = d
@@ -623,12 +705,12 @@ local function typeAndSubmitCode(code)
         if box then break end
         task.wait(0.001)
     end
-
+    
     if not box then return false, "no codebox visible" end
-
+    
     pcall(function() box.Text = code end)
     task.wait(0.001)
-
+    
     local redeemBtn = nil
     local searchNames = {"submit","redeem","claim","confirm","enter","send","apply","ok","use","go","check"}
     local p = box.Parent
@@ -653,10 +735,11 @@ local function typeAndSubmitCode(code)
         if redeemBtn then break end
         p = p.Parent
     end
-
+    
     if redeemBtn then
         if _spamRedeem then
-            for i = 1, 10 do
+            local clicks = _ultraFast and 5 or 10
+            for i = 1, clicks do
                 clickButton(redeemBtn)
                 task.wait(0.001)
             end
@@ -665,7 +748,7 @@ local function typeAndSubmitCode(code)
         end
     end
     fireBoxFocusLost(box)
-
+    
     return true, "submitted via dynamic search"
 end
 
@@ -679,7 +762,7 @@ local function aceCodeBox()
 end
 
 -- ============================================================
--- STYLING & HELPER UTILITIES (unchanged)
+-- STYLING & HELPER UTILITIES
 -- ============================================================
 local COLORS = {
     Window = Color3.fromRGB(0, 0, 0),
@@ -693,6 +776,7 @@ local COLORS = {
     Accent = Color3.fromRGB(128, 0, 255),
     Green = Color3.fromRGB(70, 210, 100),
     Red = Color3.fromRGB(255, 70, 70),
+    Gold = Color3.fromRGB(255, 215, 0),
 }
 
 local function addCorner(parent, radius)
@@ -728,7 +812,7 @@ local function makeLabel(parent, name, text, size, position, textSize, color, fo
     return label
 end
 
--- CLEANUP OLD GUIS --
+-- CLEANUP OLD GUIS
 pcall(function()
     for _, name in ipairs({"ACECodeSniperUI", "ACESettingsUI", "AutoTypeCodesUI", "ACEPaste"}) do
         local previous = game.CoreGui:FindFirstChild(name)
@@ -740,19 +824,19 @@ for _, name in ipairs({"ACECodeSniperUI", "ACESettingsUI", "AutoTypeCodesUI", "A
     if previous then previous:Destroy() end
 end
 
--- HEAD DISPLAY (BillboardGui above player) --
+-- HEAD DISPLAY
 local HeadBillboard = nil
 local function createHeadDisplay()
     if HeadBillboard then
         pcall(function() HeadBillboard:Destroy() end)
         HeadBillboard = nil
     end
-
+    
     local char = player.Character
     if not char then return end
     local head = char:FindFirstChild("Head")
     if not head then return end
-
+    
     local bill = Instance.new("BillboardGui")
     bill.Name = "ACECodeSniperHeadDisplay"
     bill.Adornee = head
@@ -761,7 +845,7 @@ local function createHeadDisplay()
     bill.MaxDistance = 100
     bill.AlwaysOnTop = true
     bill.Parent = head
-
+    
     local bg = Instance.new("Frame")
     bg.Size = UDim2.new(1, 0, 1, 0)
     bg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
@@ -769,19 +853,19 @@ local function createHeadDisplay()
     bg.BorderSizePixel = 0
     bg.Parent = bill
     addCorner(bg, 8)
-
+    
     local label = Instance.new("TextLabel")
     label.Size = UDim2.new(1, 0, 1, 0)
     label.BackgroundTransparency = 1
-    label.Text = "/discord.gg/KxKy5xK3nD"
-    label.TextColor3 = Color3.fromRGB(255, 255, 255)
+    label.Text = "⚡ CODE SNIPER ACTIVE"
+    label.TextColor3 = Color3.fromRGB(0, 255, 0)
     label.TextSize = 18
     label.Font = Enum.Font.GothamBold
     label.TextScaled = true
     label.TextXAlignment = Enum.TextXAlignment.Center
     label.TextYAlignment = Enum.TextYAlignment.Center
     label.Parent = bg
-
+    
     HeadBillboard = bill
 end
 
@@ -797,7 +881,7 @@ player.CharacterAdded:Connect(updateHeadDisplay)
 updateHeadDisplay()
 
 -- ============================================================
--- MAIN GUI CREATION (unchanged from Script 2)
+-- MAIN GUI CREATION
 -- ============================================================
 local GUI = Instance.new("ScreenGui")
 GUI.Name = "ACECodeSniperUI"
@@ -808,7 +892,7 @@ if not pcall(function() GUI.Parent = game.CoreGui end) then GUI.Parent = playerG
 
 local Window = Instance.new("Frame")
 Window.Name = "Window"
-Window.Size = UDim2.fromOffset(280, 280)
+Window.Size = UDim2.fromOffset(300, 320)
 Window.AnchorPoint = Vector2.new(1, 0)
 Window.Position = UDim2.new(1, -8, 0, 8)
 Window.BackgroundColor3 = COLORS.Window
@@ -828,7 +912,7 @@ local function updateInterfaceScale()
     local camera = workspace.CurrentCamera
     if not camera then InterfaceScale.Scale = 0.92; return end
     local viewport = camera.ViewportSize
-    local fitScale = math.min((viewport.X - 16) / 280, (viewport.Y - 16) / 280)
+    local fitScale = math.min((viewport.X - 16) / 300, (viewport.Y - 16) / 320)
     if UserInputService.TouchEnabled then
         local mobileTarget = 0.72
         InterfaceScale.Scale = math.max(0.45, math.min(mobileTarget, fitScale))
@@ -846,7 +930,6 @@ end
 workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(watchViewport)
 watchViewport()
 
--- Background image for main window
 local BackgroundImage = Instance.new("ImageLabel")
 BackgroundImage.Name = "ACEBackground"
 BackgroundImage.Size = UDim2.new(1, 0, 1, 0)
@@ -875,6 +958,7 @@ local CONSOLE_COLORS = {
     Green = "rgb(105,190,132)",
     Red = "rgb(218,105,105)",
     Cyan = "rgb(101,174,183)",
+    Gold = "rgb(255,215,0)",
 }
 
 local function scrollConsoleToBottom()
@@ -900,7 +984,7 @@ local function appendConsoleStatus(name, activated)
     scrollConsoleToBottom()
 end
 
--- Brand Mark (Avatar) --
+-- Brand Mark
 local BrandMark = Instance.new("Frame")
 BrandMark.Name = "BrandMark"
 BrandMark.Size = UDim2.fromOffset(30, 30)
@@ -922,10 +1006,9 @@ BrandImage.ScaleType = Enum.ScaleType.Fit
 BrandImage.Parent = BrandMark
 addCorner(BrandImage, 15)
 
--- Title
-makeLabel(Header, "Title", "weekly redeemer", UDim2.fromOffset(180, 25), UDim2.fromOffset(56, 17), 15, COLORS.Text, Enum.Font.GothamBold)
+makeLabel(Header, "Title", "⚡ CODE SNIPER", UDim2.fromOffset(180, 25), UDim2.fromOffset(56, 17), 15, COLORS.White, Enum.Font.GothamBold)
 
--- Status dot next to title
+-- Status Dot
 local StatusDot = Instance.new("Frame")
 StatusDot.Name = "StatusDot"
 StatusDot.Size = UDim2.fromOffset(10, 10)
@@ -940,10 +1023,9 @@ local function updateStatusDot()
     StatusDot.BackgroundColor3 = _enabled and COLORS.Green or COLORS.Red
 end
 
--- Discord link under title
 makeLabel(Header, "DiscordLink", "discord.gg/KxKy5xK3nd", UDim2.fromOffset(140, 16), UDim2.fromOffset(56, 42), 10, COLORS.Dim, Enum.Font.GothamMedium)
 
--- GEAR BUTTON (left of toggle) --
+-- GEAR BUTTON
 local GearButton = Instance.new("TextButton")
 GearButton.Name = "GearButton"
 GearButton.Size = UDim2.fromOffset(30, 30)
@@ -956,7 +1038,7 @@ GearButton.Font = Enum.Font.GothamBold
 GearButton.ZIndex = 5
 GearButton.Parent = Header
 
--- TOGGLE BUTTON --
+-- TOGGLE BUTTON
 local AutoWriteButton = Instance.new("TextButton")
 AutoWriteButton.Name = "AutoWrite"
 AutoWriteButton.Size = UDim2.fromOffset(47, 24)
@@ -992,7 +1074,7 @@ local lastToggleTime = 0
 local function toggleAutoWrite()
     if tick() - lastToggleTime < 0.15 then return end
     lastToggleTime = tick()
-
+    
     autoWriteEnabled = not autoWriteEnabled
     _enabled = autoWriteEnabled
     if not autoWriteEnabled and clearAceCapture then clearAceCapture() end
@@ -1007,8 +1089,8 @@ local function toggleAutoWrite()
     
     if ConsoleOutput then
         if autoWriteEnabled then
-            ConsoleOutput.Text = '<font color="' .. CONSOLE_COLORS.Amber .. '">&gt;</font> <font color="' .. CONSOLE_COLORS.Dim .. '">scanning for codes...</font>'
-            for _, featureName in ipairs({"Auto submit", "Riddle solver", "Retype invalid", "Spam redeem", "Auto redeem riddles"}) do
+            ConsoleOutput.Text = '<font color="' .. CONSOLE_COLORS.Amber .. '">&gt;</font> <font color="' .. CONSOLE_COLORS.Dim .. '">waiting for trigger...</font>'
+            for _, featureName in ipairs({"Auto submit", "Riddle solver", "Retype invalid", "Spam redeem", "Auto redeem riddles", "Performance Mode"}) do
                 if featureStates[featureName] then appendConsoleStatus(featureName, true) end
             end
         else
@@ -1035,7 +1117,7 @@ HeaderAccent.BackgroundTransparency = 0.5
 HeaderAccent.BorderSizePixel = 0
 HeaderAccent.Parent = Header
 
--- RIDDLE ANSWER FRAME (appears below header)
+-- RIDDLE ANSWER FRAME
 local RiddleAnswerFrame = Instance.new("Frame")
 RiddleAnswerFrame.Name = "RiddleAnswerFrame"
 RiddleAnswerFrame.Size = UDim2.new(1, -34, 0, 55)
@@ -1047,13 +1129,12 @@ RiddleAnswerFrame.Parent = Window
 addCorner(RiddleAnswerFrame, 9)
 addStroke(RiddleAnswerFrame, COLORS.Border, 1, 0.3)
 
--- Answer label
 local AnswerLabel = Instance.new("TextLabel")
 AnswerLabel.Name = "AnswerLabel"
 AnswerLabel.Size = UDim2.new(1, -10, 0.5, -2)
 AnswerLabel.Position = UDim2.fromOffset(5, 2)
 AnswerLabel.BackgroundTransparency = 1
-AnswerLabel.Text = "Riddle answer: "
+AnswerLabel.Text = "🎯 Answer: "
 AnswerLabel.TextSize = 12
 AnswerLabel.TextColor3 = COLORS.Text
 AnswerLabel.Font = Enum.Font.GothamMedium
@@ -1063,7 +1144,6 @@ AnswerLabel.TextWrapped = true
 AnswerLabel.Parent = RiddleAnswerFrame
 _answerLabel = AnswerLabel
 
--- Buttons frame
 local ButtonFrame = Instance.new("Frame")
 ButtonFrame.Name = "ButtonFrame"
 ButtonFrame.Size = UDim2.new(1, -10, 0.5, -2)
@@ -1090,8 +1170,7 @@ local function createRiddleButton(parent, text, callback, color)
     return btn
 end
 
--- Copy button
-local copyBtn = createRiddleButton(ButtonFrame, "Copy", function()
+local copyBtn = createRiddleButton(ButtonFrame, "📋 Copy", function()
     if _currentRiddleAnswer and _currentRiddleAnswer ~= "" then
         if toclipboard then
             toclipboard(_currentRiddleAnswer)
@@ -1105,16 +1184,14 @@ local copyBtn = createRiddleButton(ButtonFrame, "Copy", function()
 end, COLORS.Accent)
 copyBtn.Position = UDim2.new(0, 0, 0, 2)
 
--- Clear button
-local clearBtn = createRiddleButton(ButtonFrame, "Clear", function()
+local clearBtn = createRiddleButton(ButtonFrame, "🗑️ Clear", function()
     _currentRiddleAnswer = ""
-    if _answerLabel then _answerLabel.Text = "Riddle answer: " end
+    if _answerLabel then _answerLabel.Text = "🎯 Answer: " end
     setStatus("Cleared riddle answer", COLORS.Dim)
 end, COLORS.Control)
 clearBtn.Position = UDim2.new(0, 55, 0, 2)
 
--- Redeem button
-local redeemBtn = createRiddleButton(ButtonFrame, "Redeem", function()
+local redeemBtn = createRiddleButton(ButtonFrame, "✅ Redeem", function()
     if _currentRiddleAnswer and _currentRiddleAnswer ~= "" then
         typeAndSubmitCode(_currentRiddleAnswer)
         setStatus("Redeeming: " .. _currentRiddleAnswer, COLORS.Green)
@@ -1125,10 +1202,10 @@ end, COLORS.Green)
 redeemBtn.Position = UDim2.new(0, 110, 0, 2)
 redeemBtn.Size = UDim2.new(0, 60, 1, -4)
 
--- Console (moved down)
+-- Console
 Console = Instance.new("ScrollingFrame")
 Console.Name = "Console"
-Console.Size = UDim2.new(1, -34, 0, 100)
+Console.Size = UDim2.new(1, -34, 0, 85)
 Console.Position = UDim2.fromOffset(17, 130)
 Console.BackgroundColor3 = COLORS.Log
 Console.BorderSizePixel = 0
@@ -1155,7 +1232,7 @@ ConsoleOutput.Position = UDim2.fromOffset(9, 6)
 ConsoleOutput.BackgroundTransparency = 1
 ConsoleOutput.RichText = true
 if autoWriteEnabled then
-    ConsoleOutput.Text = '<font color="' .. CONSOLE_COLORS.Amber .. '">&gt;</font> <font color="' .. CONSOLE_COLORS.Dim .. '">scanning for codes...</font>'
+    ConsoleOutput.Text = '<font color="' .. CONSOLE_COLORS.Amber .. '">&gt;</font> <font color="' .. CONSOLE_COLORS.Dim .. '">waiting for trigger...</font>\n' .. '<font color="' .. CONSOLE_COLORS.Dim .. '">Triggers: ' .. table.concat(_triggers, ", ") .. '</font>'
 else
     ConsoleOutput.Text = '<font color="' .. CONSOLE_COLORS.Dim .. '">status:</font> <font color="' .. CONSOLE_COLORS.Red .. '">OFF</font>\n<font color="' .. CONSOLE_COLORS.Dim .. '">code sniper paused</font>'
 end
@@ -1177,7 +1254,7 @@ end
 ConsoleOutput:GetPropertyChangedSignal("AbsoluteSize"):Connect(updateConsoleCanvas)
 task.defer(updateConsoleCanvas)
 
--- CLEAR LOGS BUTTON (bottom right)
+-- Clear Logs Button
 local ClearLogsBtn = Instance.new("TextButton")
 ClearLogsBtn.Name = "ClearLogsBtn"
 ClearLogsBtn.Size = UDim2.fromOffset(60, 22)
@@ -1197,7 +1274,7 @@ ClearLogsBtn.Activated:Connect(function()
     if ConsoleOutput then ConsoleOutput.Text = "" end
 end)
 
--- WINDOW DRAGGING SYSTEM --
+-- WINDOW DRAGGING
 do
     local dragging = false
     local activeDragInput
@@ -1205,22 +1282,16 @@ do
     local startPosition
     local dragMoved = false
     local DRAG_THRESHOLD = UserInputService.TouchEnabled and 10 or 3
-
+    
     local function isOverHeaderControl(position)
         local btnPos = AutoWriteButton.AbsolutePosition
         local btnSize = AutoWriteButton.AbsoluteSize
         local gearPos = GearButton.AbsolutePosition
         local gearSize = GearButton.AbsoluteSize
-        return (position.X >= (btnPos.X - 10)
-            and position.X <= (btnPos.X + btnSize.X + 10)
-            and position.Y >= (btnPos.Y - 10)
-            and position.Y <= (btnPos.Y + btnSize.Y + 10))
-            or (position.X >= (gearPos.X - 10)
-            and position.X <= (gearPos.X + gearSize.X + 10)
-            and position.Y >= (gearPos.Y - 10)
-            and position.Y <= (gearPos.Y + gearSize.Y + 10))
+        return (position.X >= (btnPos.X - 10) and position.X <= (btnPos.X + btnSize.X + 10) and position.Y >= (btnPos.Y - 10) and position.Y <= (btnPos.Y + btnSize.Y + 10))
+            or (position.X >= (gearPos.X - 10) and position.X <= (gearPos.X + gearSize.X + 10) and position.Y >= (gearPos.Y - 10) and position.Y <= (gearPos.Y + gearSize.Y + 10))
     end
-
+    
     local function stopDragging(input)
         if input ~= activeDragInput then return end
         dragging = false
@@ -1228,37 +1299,37 @@ do
         dragStart = nil
         startPosition = nil
     end
-
+    
     Header.InputBegan:Connect(function(input)
         if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
         if dragging or isOverHeaderControl(input.Position) then return end
-
+        
         dragging = true
         activeDragInput = input
         dragStart = Vector2.new(input.Position.X, input.Position.Y)
         startPosition = Window.Position
         dragMoved = false
-
+        
         input.Changed:Connect(function()
             if input.UserInputState == Enum.UserInputState.End or input.UserInputState == Enum.UserInputState.Cancel then
                 stopDragging(input)
             end
         end)
     end)
-
+    
     UserInputService.InputChanged:Connect(function(input)
         if not dragging or not activeDragInput then return end
         local isTrackedTouch = activeDragInput.UserInputType == Enum.UserInputType.Touch and input == activeDragInput
         local isTrackedMouse = activeDragInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement
         if not isTrackedTouch and not isTrackedMouse then return end
-
+        
         local current = Vector2.new(input.Position.X, input.Position.Y)
         local delta = current - dragStart
         if not dragMoved then
             if delta.Magnitude < DRAG_THRESHOLD then return end
             dragMoved = true
         end
-
+        
         Window.Position = UDim2.new(
             startPosition.X.Scale,
             startPosition.X.Offset + delta.X,
@@ -1278,17 +1349,17 @@ local function createSettingsUI()
         SettingsGUI = nil
         return
     end
-
+    
     SettingsGUI = Instance.new("ScreenGui")
     SettingsGUI.Name = "ACESettingsUI"
     SettingsGUI.ResetOnSpawn = false
     SettingsGUI.IgnoreGuiInset = true
     SettingsGUI.DisplayOrder = 998
     if not pcall(function() SettingsGUI.Parent = game.CoreGui end) then SettingsGUI.Parent = playerGui end
-
+    
     local SettingsWindow = Instance.new("Frame")
     SettingsWindow.Name = "SettingsWindow"
-    SettingsWindow.Size = UDim2.fromOffset(260, 330)
+    SettingsWindow.Size = UDim2.fromOffset(270, 360)
     SettingsWindow.AnchorPoint = Vector2.new(0.5, 0.5)
     SettingsWindow.Position = UDim2.new(0.5, 0, 0.5, 0)
     SettingsWindow.BackgroundTransparency = 1
@@ -1297,7 +1368,7 @@ local function createSettingsUI()
     SettingsWindow.Parent = SettingsGUI
     addCorner(SettingsWindow, 14)
     addStroke(SettingsWindow, COLORS.Border, 1, 0.3)
-
+    
     local SettingsBg = Instance.new("ImageLabel")
     SettingsBg.Name = "SettingsBackground"
     SettingsBg.Size = UDim2.new(1, 0, 1, 0)
@@ -1309,11 +1380,11 @@ local function createSettingsUI()
     SettingsBg.ZIndex = 1
     SettingsBg.Parent = SettingsWindow
     addCorner(SettingsBg, 14)
-
+    
     local SettingsTitle = makeLabel(SettingsWindow, "Title", "⚙️ Settings", UDim2.new(1, -20, 0, 40), UDim2.fromOffset(10, 10), 18, COLORS.Text, Enum.Font.GothamBold)
     SettingsTitle.TextXAlignment = Enum.TextXAlignment.Center
     SettingsTitle.ZIndex = 2
-
+    
     local closeBtn = Instance.new("TextButton")
     closeBtn.Name = "CloseBtn"
     closeBtn.Size = UDim2.fromOffset(30, 30)
@@ -1326,7 +1397,7 @@ local function createSettingsUI()
     closeBtn.ZIndex = 2
     closeBtn.Parent = SettingsWindow
     closeBtn.Activated:Connect(function() if SettingsGUI then SettingsGUI:Destroy(); SettingsGUI = nil end end)
-
+    
     local function makeSettingCard(parent, yOffset, height)
         local card = Instance.new("Frame")
         card.Size = UDim2.new(1, -20, 0, height)
@@ -1340,7 +1411,7 @@ local function createSettingsUI()
         addStroke(card, COLORS.Border, 1, 0.5)
         return card
     end
-
+    
     local function makeStateButton(parent, enabled, consoleName, onToggle)
         parent.Active = true
         featureStates[consoleName] = enabled
@@ -1385,7 +1456,7 @@ local function createSettingsUI()
         end)
         return button
     end
-
+    
     -- Auto submit
     local autoCard = makeSettingCard(SettingsWindow, 45, 38)
     makeLabel(autoCard, "Title", "Auto submit", UDim2.new(1, -60, 1, 0), UDim2.fromOffset(10, 0), 12, COLORS.White, Enum.Font.GothamMedium)
@@ -1394,27 +1465,27 @@ local function createSettingsUI()
         savedConfig.autoSubmit = state
         saveConfig()
     end)
-
+    
     -- Riddle solver
-    local riddleCard = makeSettingCard(SettingsWindow, 90, 38)
+    local riddleCard = makeSettingCard(SettingsWindow, 88, 38)
     makeLabel(riddleCard, "Title", "Riddle solver", UDim2.new(1, -60, 1, 0), UDim2.fromOffset(10, 0), 12, COLORS.White, Enum.Font.GothamMedium)
     makeStateButton(riddleCard, _riddleSolver, "Riddle solver", function(state)
         _riddleSolver = state
         savedConfig.riddleSolver = state
         saveConfig()
     end)
-
+    
     -- Auto redeem riddles
-    local autoRiddleCard = makeSettingCard(SettingsWindow, 135, 38)
+    local autoRiddleCard = makeSettingCard(SettingsWindow, 131, 38)
     makeLabel(autoRiddleCard, "Title", "Auto redeem riddles", UDim2.new(1, -60, 1, 0), UDim2.fromOffset(10, 0), 12, COLORS.White, Enum.Font.GothamMedium)
     makeStateButton(autoRiddleCard, _autoRedeemRiddles, "Auto redeem riddles", function(state)
         _autoRedeemRiddles = state
         savedConfig.autoRedeemRiddles = state
         saveConfig()
     end)
-
+    
     -- Submit after
-    local delayCard = makeSettingCard(SettingsWindow, 180, 42)
+    local delayCard = makeSettingCard(SettingsWindow, 174, 42)
     makeLabel(delayCard, "Title", "Submit after", UDim2.fromOffset(130, 42), UDim2.fromOffset(10, 0), 12, COLORS.White, Enum.Font.GothamMedium)
     local CounterShell = Instance.new("Frame")
     CounterShell.Name = "Counter"
@@ -1427,7 +1498,7 @@ local function createSettingsUI()
     CounterShell.ZIndex = 2
     addCorner(CounterShell, 7)
     addStroke(CounterShell, COLORS.Border, 1, 0.5)
-
+    
     local Minus = Instance.new("TextButton")
     Minus.Name = "Minus"
     Minus.Size = UDim2.fromOffset(22, 22)
@@ -1443,11 +1514,11 @@ local function createSettingsUI()
     Minus.Parent = CounterShell
     Minus.ZIndex = 3
     addCorner(Minus, 5)
-
+    
     local Count = makeLabel(CounterShell, "Count", tostring(_submitAfter), UDim2.fromOffset(24, 22), UDim2.fromOffset(33, 3), 15, COLORS.White, Enum.Font.GothamBold)
     Count.TextXAlignment = Enum.TextXAlignment.Center
     Count.ZIndex = 3
-
+    
     local Plus = Instance.new("TextButton")
     Plus.Name = "Plus"
     Plus.Size = UDim2.fromOffset(22, 22)
@@ -1463,7 +1534,7 @@ local function createSettingsUI()
     Plus.Parent = CounterShell
     Plus.ZIndex = 3
     addCorner(Plus, 5)
-
+    
     local function decr()
         _submitAfter = math.max(1, _submitAfter - 1)
         Count.Text = tostring(_submitAfter)
@@ -1482,25 +1553,40 @@ local function createSettingsUI()
     Minus.MouseButton1Click:Connect(decr)
     Plus.Activated:Connect(incr)
     Plus.MouseButton1Click:Connect(incr)
-
+    
     -- Retype invalid
-    local retypeCard = makeSettingCard(SettingsWindow, 228, 38)
+    local retypeCard = makeSettingCard(SettingsWindow, 221, 38)
     makeLabel(retypeCard, "Title", "Retype invalid", UDim2.new(1, -60, 1, 0), UDim2.fromOffset(10, 0), 12, COLORS.White, Enum.Font.GothamMedium)
     makeStateButton(retypeCard, _retypeInvalid, "Retype invalid", function(state)
         _retypeInvalid = state
         savedConfig.retypeInvalid = state
         saveConfig()
     end)
-
+    
     -- Spam redeem
-    local spamCard = makeSettingCard(SettingsWindow, 273, 38)
+    local spamCard = makeSettingCard(SettingsWindow, 264, 38)
     makeLabel(spamCard, "Title", "Spam redeem", UDim2.new(1, -60, 1, 0), UDim2.fromOffset(10, 0), 12, COLORS.White, Enum.Font.GothamMedium)
     makeStateButton(spamCard, _spamRedeem, "Spam redeem", function(state)
         _spamRedeem = state
         savedConfig.spamRedeem = state
         saveConfig()
     end)
-
+    
+    -- Performance Mode
+    local perfCard = makeSettingCard(SettingsWindow, 307, 38)
+    makeLabel(perfCard, "Title", "⚡ Performance Mode", UDim2.new(1, -60, 1, 0), UDim2.fromOffset(10, 0), 12, COLORS.Gold, Enum.Font.GothamMedium)
+    makeStateButton(perfCard, savedConfig.performanceMode, "Performance Mode", function(state)
+        savedConfig.performanceMode = state
+        saveConfig()
+        if state then
+            applyPerformanceSettings()
+            setStatus("⚡ Performance mode ON", COLORS.Green)
+        else
+            revertPerformanceSettings()
+            setStatus("Performance mode OFF", COLORS.Red)
+        end
+    end)
+    
     -- Dragging for settings window
     do
         local drag, input, start, pos
@@ -1539,7 +1625,7 @@ GearButton.InputBegan:Connect(function(input)
 end)
 
 -- ============================================================
--- REST OF SCRIPT
+-- CONSOLE FUNCTIONS
 -- ============================================================
 local function col3ToRich(col)
     if col == COLORS.Green then return CONSOLE_COLORS.Green end
@@ -1547,6 +1633,7 @@ local function col3ToRich(col)
     if col == COLORS.Text then return CONSOLE_COLORS.Amber end
     if col == COLORS.White then return CONSOLE_COLORS.Cyan end
     if col == COLORS.Dim then return CONSOLE_COLORS.Dim end
+    if col == COLORS.Gold then return CONSOLE_COLORS.Gold end
     return string.format("rgb(%d,%d,%d)", math.floor(col.R * 255 + 0.5), math.floor(col.G * 255 + 0.5), math.floor(col.B * 255 + 0.5))
 end
 
@@ -1678,6 +1765,9 @@ end
 
 function appendToBox(text)
     if not text or text == "" then return end
+    
+    if not _isActive then return end
+    
     if _lastWatchedBox and not isVisibleChain(_lastWatchedBox) then
         resetPasteCounter()
         clearBoxWatchers()
@@ -1686,7 +1776,7 @@ function appendToBox(text)
     _capturedParts[#_capturedParts + 1] = text
     local combinedCode = table.concat(_capturedParts)
     local capturedCount = #_capturedParts
-
+    
     if box then
         _lastBox = box
         watchBoxForBlankReset(box)
@@ -1702,10 +1792,10 @@ function appendToBox(text)
     else
         setStatus("Captured; opening & searching UI...", COLORS.Text)
     end
-
-    setStatus("Pasted " .. tostring(capturedCount) .. "/" .. tostring(_submitAfter), COLORS.Green)
+    
+    setStatus("Pasted " .. tostring(capturedCount) .. "/" .. tostring(_submitAfter) .. " (trigger: " .. _triggerUsed .. ")", COLORS.Green)
     flashCode(combinedCode, COLORS.Green)
-
+    
     if capturedCount >= _submitAfter then
         _capturedParts = {}
         if _autoAccept then
@@ -1714,7 +1804,7 @@ function appendToBox(text)
             local ok, statusMsg = typeAndSubmitCode(combinedCode)
             
             if ok then
-                setStatus("Redeemed: " .. combinedCode, COLORS.Green)
+                setStatus("✅ Redeemed: " .. combinedCode, COLORS.Green)
             else
                 local restored = restoreRejectedText(box, combinedCode)
                 clearPendingSubmission()
@@ -1725,6 +1815,10 @@ function appendToBox(text)
                     setStatus("Failed: " .. tostring(statusMsg), COLORS.Red)
                 end
             end
+            
+            _isActive = false
+            _triggerUsed = ""
+            setStatus("⏳ Waiting for trigger... (" .. table.concat(_triggers, ", ") .. ")", COLORS.Dim)
         end
     end
 end
@@ -1744,7 +1838,7 @@ playerGui.DescendantAdded:Connect(function(obj)
 end)
 
 -- ============================================================
--- ENHANCED ANNOUNCEMENT LISTENER (with fallback to chat)
+-- ANNOUNCEMENT LISTENER WITH TRIGGER SYSTEM
 -- ============================================================
 local function resolveNotifyRemote()
     if _G.PhiNotifyRemote then return _G.PhiNotifyRemote end
@@ -1801,35 +1895,63 @@ local function onAceAnnouncement(...)
     local text = aceStripRich(tostring((...) or ""))
     text = text:match("^%s*(.-)%s*$") or ""
     if text == "" then return end
-
-    -- If it contains a space, treat as riddle (local DB first, AI fallback only)
+    
+    local lower = text:lower()
+    
+    -- Trigger detection
+    local triggerFound = false
+    local matchedTrigger = ""
+    for _, trigger in ipairs(_triggers) do
+        if lower:find(trigger:lower()) then
+            triggerFound = true
+            matchedTrigger = trigger
+            break
+        end
+    end
+    
+    if triggerFound then
+        _isActive = true
+        _triggerUsed = matchedTrigger
+        _capturedParts = {}
+        setStatus("🔴 TRIGGERED: " .. matchedTrigger .. " — Waiting for code parts...", COLORS.Gold)
+        return
+    end
+    
+    if not _isActive then
+        return
+    end
+    
+    -- Riddle detection (multi-word)
     if _riddleSolver and text:find("%s") then
         if setStatus then setStatus("Riddle detected: " .. text, COLORS and COLORS.Text) end
         _riddleSeq = _riddleSeq + 1
         solveRiddle(text, _riddleSeq)
         return
     end
-
-    -- Single-word: handle as code
+    
+    -- Single-word code capture
     for _, word in ipairs(aceTokenize(text)) do
         aceCollectBuffer[#aceCollectBuffer + 1] = word
     end
     
     local parts = {}
-    for index = 1, math.min(#aceCollectBuffer, ACE_WORD_COUNT) do
+    for index = 1, math.min(#aceCollectBuffer, 1) do
         parts[index] = aceCollectBuffer[index]
     end
-    if #aceCollectBuffer < ACE_WORD_COUNT then return end
+    if #aceCollectBuffer < 1 then return end
     aceCollectBuffer = {}
     
     local captured = table.concat(parts)
     if captured == "" or _seen[captured] then return end
     _seen[captured] = true
     task.delay(1.25, function() _seen[captured] = nil end)
-    appendToBox(captured)
+    
+    if _isActive then
+        appendToBox(captured)
+    end
 end
 
--- Hook into the notification remote
+-- Hook remote
 local aceNotifyRemote = resolveNotifyRemote()
 local aceListenConnection
 if aceNotifyRemote then
@@ -1859,21 +1981,20 @@ else
     end
 end
 
--- Stop function to clean up everything
+-- Initial status
+setStatus("⏳ Waiting for trigger... (" .. table.concat(_triggers, ", ") .. ")", COLORS.Dim)
+
+-- Apply performance settings on startup
+if savedConfig.performanceMode then
+    task.spawn(applyPerformanceSettings)
+end
+
+-- Stop function
 if getgenv then
     getgenv().StopAura = function()
-        if aceListenConnection then
-            pcall(function() aceListenConnection:Disconnect() end)
-            aceListenConnection = nil
-        end
-        if getgenv().ACECodeSniperNotifyConnection then
-            pcall(function() getgenv().ACECodeSniperNotifyConnection:Disconnect() end)
-            getgenv().ACECodeSniperNotifyConnection = nil
-        end
-        if getgenv().ACECodeSniperChatConnection then
-            pcall(function() getgenv().ACECodeSniperChatConnection:Disconnect() end)
-            getgenv().ACECodeSniperChatConnection = nil
-        end
+        if aceListenConnection then pcall(function() aceListenConnection:Disconnect() end) end
+        if getgenv().ACECodeSniperNotifyConnection then pcall(function() getgenv().ACECodeSniperNotifyConnection:Disconnect() end) end
+        if getgenv().ACECodeSniperChatConnection then pcall(function() getgenv().ACECodeSniperChatConnection:Disconnect() end) end
         if GUI then GUI:Destroy() end
         if SettingsGUI then SettingsGUI:Destroy() end
         if HeadBillboard then pcall(function() HeadBillboard:Destroy() end) end
