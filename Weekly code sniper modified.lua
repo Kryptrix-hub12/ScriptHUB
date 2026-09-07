@@ -679,7 +679,7 @@ local function aceCodeBox()
 end
 
 -- ============================================================
--- STYLING & HELPER UTILITIES (unchanged from Script 2)
+-- STYLING & HELPER UTILITIES (unchanged)
 -- ============================================================
 local COLORS = {
     Window = Color3.fromRGB(0, 0, 0),
@@ -1734,7 +1734,7 @@ local function watchRedemptionFeedbackObject(obj)
     handleRedemptionFeedback(obj.Text or "", obj)
     obj:GetPropertyChangedSignal("Text"):Connect(function()
         handleRedemptionFeedback(obj.Text or "", obj)
-    end
+    end)
 end
 
 for _, obj in ipairs(playerGui:GetDescendants()) do watchRedemptionFeedbackObject(obj) end
@@ -1840,7 +1840,7 @@ if aceNotifyRemote then
     aceListenConnection = aceNotifyRemote.OnClientEvent:Connect(function(...)
         if not _enabled then return end
         pcall(onAceAnnouncement, ...)
-    end
+    end)
     if getgenv then getgenv().ACECodeSniperNotifyConnection = aceListenConnection end
 else
     if player.Chatted then
@@ -1851,7 +1851,7 @@ else
         aceListenConnection = player.Chatted:Connect(function(msg)
             if not _enabled then return end
             pcall(onAceAnnouncement, msg)
-        end
+        end)
         if getgenv then getgenv().ACECodeSniperChatConnection = aceListenConnection end
         setStatus("No notification remote found – listening to chat instead", COLORS.Text)
     else
@@ -1878,4 +1878,4 @@ if getgenv then
         if SettingsGUI then SettingsGUI:Destroy() end
         if HeadBillboard then pcall(function() HeadBillboard:Destroy() end) end
     end
-            end
+end
