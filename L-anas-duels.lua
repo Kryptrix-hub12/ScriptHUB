@@ -9,7 +9,96 @@ local RunService = game:GetService("RunService")
 local StarterGui = game:GetService("StarterGui")
 local Lighting = game:GetService("Lighting")
 local HS = game:GetService("HttpService")
+
 local player = Players.LocalPlayer
+
+-- ============================================================
+-- RITUAL HUB STARTUP GUARD / GUI RECOVERY
+-- Prevents a bad saved UI position or an executor-specific GUI
+-- parenting issue from making the whole script appear to do nothing.
+-- ============================================================
+task.spawn(function()
+    local ok = pcall(function()
+        repeat task.wait() until game:IsLoaded()
+        local pg = player:WaitForChild("PlayerGui", 15)
+        if not pg then return end
+
+        -- Give the main initializer a moment to create its GUI.
+        task.wait(1.25)
+
+        local gui = pg:FindFirstChild("RitualHub")
+        local core = game:GetService("CoreGui")
+        if not gui then
+            gui = core:FindFirstChild("RitualHub")
+        end
+
+        if gui then
+            gui.Enabled = true
+
+            local outer = gui:FindFirstChild("Outer", true)
+            if outer and outer:IsA("GuiObject") then
+                -- A previously saved position can be outside the viewport.
+                local p = outer.Position
+                if p.X.Scale < -0.5 or p.X.Scale > 1.5
+                    or p.Y.Scale < -0.5 or p.Y.Scale > 1.5
+                    or p.X.Offset < -500 or p.X.Offset > 3000
+                    or p.Y.Offset < -500 or p.Y.Offset > 3000 then
+                    outer.Position = UDim2.new(0, 20, 0, 80)
+                end
+                outer.Visible = true
+            end
+            return
+        end
+
+        -- If initialization stopped before the main ScreenGui was created,
+        -- leave a small visible recovery panel instead of silently failing.
+        local recovery = Instance.new("ScreenGui")
+        recovery.Name = "RitualHub"
+        recovery.ResetOnSpawn = false
+        recovery.IgnoreGuiInset = true
+        recovery.DisplayOrder = 10000
+
+        local parented = pcall(function()
+            recovery.Parent = core
+        end)
+        if not parented then
+            recovery.Parent = pg
+        end
+
+        local panel = Instance.new("Frame")
+        panel.Name = "StartupRecovery"
+        panel.Size = UDim2.fromOffset(300, 120)
+        panel.Position = UDim2.new(0, 20, 0, 80)
+        panel.BackgroundColor3 = Color3.fromRGB(7, 15, 24)
+        panel.BorderSizePixel = 0
+        panel.Parent = recovery
+        Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 12)
+
+        local title = Instance.new("TextLabel")
+        title.Size = UDim2.new(1, -24, 0, 30)
+        title.Position = UDim2.fromOffset(12, 10)
+        title.BackgroundTransparency = 1
+        title.Text = "RITUAL HUB"
+        title.TextColor3 = Color3.fromRGB(120, 190, 255)
+        title.Font = Enum.Font.GothamBold
+        title.TextSize = 18
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Parent = panel
+
+        local status = Instance.new("TextLabel")
+        status.Size = UDim2.new(1, -24, 0, 42)
+        status.Position = UDim2.fromOffset(12, 48)
+        status.BackgroundTransparency = 1
+        status.Text = "GUI initialization stopped early.\nRe-execute the script once."
+        status.TextColor3 = Color3.fromRGB(220, 225, 235)
+        status.Font = Enum.Font.GothamMedium
+        status.TextSize = 12
+        status.TextWrapped = true
+        status.TextXAlignment = Enum.TextXAlignment.Left
+        status.TextYAlignment = Enum.TextYAlignment.Top
+        status.Parent = panel
+    end)
+end)
 
 local _GACC = {}
 
@@ -4469,7 +4558,9 @@ _GACC.GuiToggleSetters = {}
 
     local GuiHub=Instance.new("ScreenGui")
     GuiHub.Name="RitualHub"; GuiHub.ResetOnSpawn=false
-    GuiHub.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; GuiHub.Parent=PlayerGui
+    GuiHub.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+    local _guiParentOk=pcall(function() GuiHub.Parent=game:GetService("CoreGui") end)
+    if not _guiParentOk then GuiHub.Parent=PlayerGui end
     GuiRefs.hub=GuiHub
 
     local Outer=Instance.new("Frame")
@@ -4530,7 +4621,17 @@ _GACC.GuiToggleSetters = {}
         end
     end)
     Outer.Position=UDim2.new(0,20,0,80)
-    do local mp=_GACC.getUiPos and _GACC.getUiPos("menu"); if mp then Outer.Position=mp end end
+    do
+        local mp=_GACC.getUiPos and _GACC.getUiPos("menu")
+        if mp then
+            local bad = mp.X.Scale < -0.5 or mp.X.Scale > 1.5
+                or mp.Y.Scale < -0.5 or mp.Y.Scale > 1.5
+                or mp.X.Offset < -500 or mp.X.Offset > 3000
+                or mp.Y.Offset < -500 or mp.Y.Offset > 3000
+            if not bad then Outer.Position=mp end
+        end
+    end
+    Outer.Visible=true
 
     do 
     local BgCont=Instance.new("Frame")
