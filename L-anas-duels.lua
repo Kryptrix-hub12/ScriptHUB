@@ -1,6 +1,6 @@
 -- RITUAL HUB UPDATED BACKEND
 -- New TP Bat + Bat Aimbot + Speed Constraint + Anti Die + Anti Fling
--- V2 SPEED FIX: Normal/Carry/Lagger modes are mutually controlled; stale Carry state is cleared.
+-- V3 SPEED FIX: authoritative mode state + live GUI speed values; no stale Carry latch.
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UIS = game:GetService("UserInputService")
@@ -1756,43 +1756,83 @@ local function setupSpeedIndicator(char)
 end
 
 -- ==================== SPEED MODE STATE ====================
--- Keep the two legacy booleans for compatibility, but enforce one
--- authoritative combination so Carry/Lagger cannot leave stale state behind.
+-- One authoritative mode prevents Carry from remaining latched after a toggle.
+-- The numeric values below are always read from the live GUI variables NS/CS/
+-- LAGGER_SPEED/LAGGER_CARRY_SPEED, so changing the GUI immediately changes
+-- the active speed.
+local speedMode = "Normal"
+
 local function setSpeedMode(mode)
-    if mode == "Lagger Carry" then
-        laggerModeEnabled = true
-        carrySpeedActive = true
-    elseif mode == "Lagger" then
-        laggerModeEnabled = true
-        carrySpeedActive = false
-    elseif mode == "Carry" then
-        laggerModeEnabled = false
-        carrySpeedActive = true
-    else
-        laggerModeEnabled = false
-        carrySpeedActive = false
+    if mode ~= "Normal" and mode ~= "Carry" and mode ~= "Lagger" and mode ~= "Lagger Carry" then
+        mode = "Normal"
     end
+
+    speedMode = mode
+    carrySpeedActive = (mode == "Carry" or mode == "Lagger Carry")
+    laggerModeEnabled = (mode == "Lagger" or mode == "Lagger Carry")
+
     if refreshSpeedModeLabel then refreshSpeedModeLabel() end
 end
 
+local function syncSpeedMode()
+    -- Compatibility: if another part of the script changed the legacy booleans,
+    -- convert that change into the authoritative mode once.
+    local expectedCarry = (speedMode == "Carry" or speedMode == "Lagger Carry")
+    local expectedLagger = (speedMode == "Lagger" or speedMode == "Lagger Carry")
+
+    if carrySpeedActive ~= expectedCarry or laggerModeEnabled ~= expectedLagger then
+        if laggerModeEnabled and carrySpeedActive then
+            speedMode = "Lagger Carry"
+        elseif laggerModeEnabled then
+            speedMode = "Lagger"
+        elseif carrySpeedActive then
+            speedMode = "Carry"
+        else
+            speedMode = "Normal"
+        end
+        carrySpeedActive = (speedMode == "Carry" or speedMode == "Lagger Carry")
+        laggerModeEnabled = (speedMode == "Lagger" or speedMode == "Lagger Carry")
+    end
+    return speedMode
+end
+
 local function getActiveMoveSpeed()
-    if laggerModeEnabled and carrySpeedActive then
-        return LAGGER_CARRY_SPEED
-    elseif laggerModeEnabled then
-        return LAGGER_SPEED
-    elseif carrySpeedActive then
-        return CS
+    local mode = syncSpeedMode()
+    if mode == "Lagger Carry" then
+        return tonumber(LAGGER_CARRY_SPEED) or 0
+    elseif mode == "Lagger" then
+        return tonumber(LAGGER_SPEED) or 0
+    elseif mode == "Carry" then
+        return tonumber(CS) or 0
     else
-        return NS
+        return tonumber(NS) or 0
     end
 end
 
-local function getAutoPathSpeed()
-    if laggerModeEnabled then
-        return carrySpeedActive and LAGGER_CARRY_SPEED or LAGGER_SPEED
-    else
-        return NS
+local function _validateSpeedState()
+    local mode=syncSpeedMode()
+    if mode=="Normal" then
+        assert(not carrySpeedActive and not laggerModeEnabled)
+    elseif mode=="Carry" then
+        assert(carrySpeedActive and not laggerModeEnabled)
+    elseif mode=="Lagger" then
+        assert(laggerModeEnabled and not carrySpeedActive)
+    elseif mode=="Lagger Carry" then
+        assert(laggerModeEnabled and carrySpeedActive)
     end
+    return mode
+end
+
+local function getAutoPathSpeed()
+    local mode = syncSpeedMode()
+    if mode == "Lagger Carry" then
+        return tonumber(LAGGER_CARRY_SPEED) or 0
+    elseif mode == "Lagger" then
+        return tonumber(LAGGER_SPEED) or 0
+    else
+        return tonumber(NS) or 0
+    end
+end
 end
 
 do 
@@ -1807,9 +1847,13 @@ local function updateAutoSwitchSpeed()
     local isStealSpeed=h.WalkSpeed<25
     if isStealSpeed==_autoSwitchWasSteal then return end
     _autoSwitchWasSteal=isStealSpeed
-    if isStealSpeed then carrySpeedActive = true else carrySpeedActive = false end
-    if refreshSpeedModeLabel then refreshSpeedModeLabel() end
+    if isStealSpeed then
+        setSpeedMode("Carry")
+    else
+        setSpeedMode("Normal")
+    end
     if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
+    if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
 end
 task.spawn(function() while true do task.wait(0.1);updateAutoSwitchSpeed() end end)
 end 
@@ -2724,20 +2768,6 @@ local function sampleGround(hrp)
     return Vector3.new(0,1,0),false
 end
 
-local function getActiveMoveSpeed()
-    local laggerCarryActive=laggerModeEnabled and carrySpeedActive
-
-    if laggerCarryActive then
-        return LAGGER_CARRY_SPEED
-    elseif laggerModeEnabled then
-        return LAGGER_SPEED
-    elseif carrySpeedActive then
-        return CS
-    else
-        return NS
-    end
-end
-
 local function setSpeedConstraint(hrp,horizVel)
     if not hrp or not horizVel then return end
 
@@ -2836,6 +2866,7 @@ RunService.RenderStepped:Connect(function()
 
     if not autoBatEnabled and not autoLeftEnabled and not autoRightEnabled then
         local md=hum.MoveDirection
+        local _mode=_validateSpeedState()
         local spd=getActiveMoveSpeed()
 
         if md.Magnitude>0 then
@@ -3268,8 +3299,7 @@ end
     local state={applied=false,waiting=false,watchUntil=0,graceUntil=0,savedMode=nil,stealWasActive=false}
 
     local function modeName()
-        if laggerModeEnabled then return carrySpeedActive and "Lagger Carry" or "Lagger" end
-        return carrySpeedActive and "Carry" or "Normal"
+        return speedMode
     end
 
     local function setModes(lagger,carry)
@@ -3308,7 +3338,7 @@ end
         state.waiting=false;state.watchUntil=0
         if not state.applied then state.savedMode=modeName() end
         state.applied=true;state.graceUntil=tick()+.75
-        local wasLagger=state.savedMode=="Lagger" or state.savedMode=="Lagger Carry" or laggerModeEnabled
+        local wasLagger=state.savedMode=="Lagger" or state.savedMode=="Lagger Carry"
         if wasLagger then setModes(true,true) else setModes(false,true) end
     end
 
@@ -3382,7 +3412,7 @@ end
 task.spawn(function() while task.wait(5) do saveConfig() end end)
 
 local function resetAllSettings()
-    NS=59;CS=29;LAGGER_SPEED=30;LAGGER_CARRY_SPEED=15;carrySpeedActive=false;laggerModeEnabled=false
+    NS=59;CS=29;LAGGER_SPEED=30;LAGGER_CARRY_SPEED=15;setSpeedMode("Normal")
     autoSwitchSpeedEnabled=false;antiRagdollEnabled=false;infJumpEnabled=false;infJumpMode="manual"
     medusaCounterEnabled=false;unwalkEnabled=false
     autoLeftEnabled=false;autoRightEnabled=false;autoBatEnabled=false;autoSwingEnabled=true;autoMoveSwingEnabled=false
@@ -3437,24 +3467,28 @@ refreshSpeedModeLabel=function()
 end
 
 toggleCarryMode=function()
-    -- Carry key is a clean Normal <-> Carry switch.
-    if laggerModeEnabled then
-        setSpeedMode("Carry")
-    elseif carrySpeedActive then
+    -- Carry is independent: Normal <-> Carry.
+    local mode = syncSpeedMode()
+    if mode == "Carry" then
         setSpeedMode("Normal")
     else
         setSpeedMode("Carry")
     end
+    if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
+    if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
 end
 
 toggleLaggerMode=function()
-    -- Lagger key is a clean Normal <-> Lagger switch.
-    -- It never inherits the old Carry flag.
-    if laggerModeEnabled then
+    -- Lagger is independent: Normal <-> Lagger.
+    -- Turning Lagger on always clears Carry.
+    local mode = syncSpeedMode()
+    if mode == "Lagger" then
         setSpeedMode("Normal")
     else
         setSpeedMode("Lagger")
     end
+    if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
+    if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
 end
 
 ;(function()
@@ -4167,17 +4201,17 @@ end
 local origToggleCarry = toggleCarryMode
 toggleCarryMode = function()
     origToggleCarry()
-    updateMobileButtonState("CarrySpeed", (not laggerModeEnabled) and carrySpeedActive)
-    updateMobileButtonState("LaggerNormal", laggerModeEnabled and not carrySpeedActive)
-    updateMobileButtonState("LaggerCarry", laggerModeEnabled and carrySpeedActive)
+    updateMobileButtonState("CarrySpeed", speedMode == "Carry")
+    updateMobileButtonState("LaggerNormal", speedMode == "Lagger")
+    updateMobileButtonState("LaggerCarry", speedMode == "Lagger Carry")
 end
 
 local origToggleLagger = toggleLaggerMode
 toggleLaggerMode = function()
     origToggleLagger()
-    updateMobileButtonState("CarrySpeed", (not laggerModeEnabled) and carrySpeedActive)
-    updateMobileButtonState("LaggerNormal", laggerModeEnabled and not carrySpeedActive)
-    updateMobileButtonState("LaggerCarry", laggerModeEnabled and carrySpeedActive)
+    updateMobileButtonState("CarrySpeed", speedMode == "Carry")
+    updateMobileButtonState("LaggerNormal", speedMode == "Lagger")
+    updateMobileButtonState("LaggerCarry", speedMode == "Lagger Carry")
 end
 
 task.spawn(function()
@@ -4189,9 +4223,9 @@ task.spawn(function()
             updateMobileButtonState("BatAimbot", autoBatEnabled)
             updateMobileButtonState("AutoRight", autoRightEnabled)
             updateMobileButtonState("TpDown", false)
-            updateMobileButtonState("CarrySpeed", (not laggerModeEnabled) and carrySpeedActive)
-            updateMobileButtonState("LaggerNormal", laggerModeEnabled and not carrySpeedActive)
-            updateMobileButtonState("LaggerCarry", laggerModeEnabled and carrySpeedActive)
+            updateMobileButtonState("CarrySpeed", speedMode == "Carry")
+            updateMobileButtonState("LaggerNormal", speedMode == "Lagger")
+            updateMobileButtonState("LaggerCarry", speedMode == "Lagger Carry")
             updateMobileButtonState("InstantReset", false)
             updateMobileButtonState("TpBat", batDesyncTpEnabled)
         end
@@ -4206,13 +4240,20 @@ pcall(function()
     if type(d.carrySpeed)=="number" and d.carrySpeed>0 then CS=d.carrySpeed end
     if type(d.laggerSpeed)=="number" and d.laggerSpeed>0 then LAGGER_SPEED=d.laggerSpeed end
     if type(d.laggerCarrySpeed)=="number" and d.laggerCarrySpeed>0 then LAGGER_CARRY_SPEED=d.laggerCarrySpeed end
-    if type(d.carrySpeedActive)=="boolean" then carrySpeedActive=d.carrySpeedActive end
-    if type(d.laggerModeEnabled)=="boolean" then laggerModeEnabled=d.laggerModeEnabled end
-    -- Normalize legacy saved state immediately after loading.
-    if laggerModeEnabled then
-        carrySpeedActive = carrySpeedActive == true
+    if type(d.laggerModeEnabled)=="boolean" or type(d.carrySpeedActive)=="boolean" then
+        local savedLagger = d.laggerModeEnabled == true
+        local savedCarry = d.carrySpeedActive == true
+        if savedLagger and savedCarry then
+            setSpeedMode("Lagger Carry")
+        elseif savedLagger then
+            setSpeedMode("Lagger")
+        elseif savedCarry then
+            setSpeedMode("Carry")
+        else
+            setSpeedMode("Normal")
+        end
     else
-        carrySpeedActive = carrySpeedActive == true
+        setSpeedMode("Normal")
     end
     if type(d.antiRagdoll)=="boolean" then antiRagdollEnabled=d.antiRagdoll end
     if type(d.infiniteJump)=="boolean" then infJumpEnabled=d.infiniteJump end
@@ -5508,10 +5549,10 @@ local profileLine=Instance.new("Frame",userF)
     do
     local sp=CategoryRefs.contents["Speed"]
     local b=mkSection(sp,"SPEED CONFIGURATION",0)
-    addInputRow(b,"Normal Speed",NS,1,function(v) NS=v; saveConfig() end)
-    addInputRow(b,"Carry Speed",CS,2,function(v) CS=v; saveConfig() end)
-    addInputRow(b,"Lagger Normal",LAGGER_SPEED,3,function(v) LAGGER_SPEED=v; saveConfig() end)
-    addInputRow(b,"Lagger Carry",LAGGER_CARRY_SPEED,4,function(v) LAGGER_CARRY_SPEED=v; saveConfig() end)
+    addInputRow(b,"Normal Speed",NS,1,function(v) NS=tonumber(v) or NS; saveConfig() end)
+    addInputRow(b,"Carry Speed",CS,2,function(v) CS=tonumber(v) or CS; saveConfig() end)
+    addInputRow(b,"Lagger Normal",LAGGER_SPEED,3,function(v) LAGGER_SPEED=tonumber(v) or LAGGER_SPEED; saveConfig() end)
+    addInputRow(b,"Lagger Carry",LAGGER_CARRY_SPEED,4,function(v) LAGGER_CARRY_SPEED=tonumber(v) or LAGGER_CARRY_SPEED; saveConfig() end)
     -- Carry Mode / Lagger Mode rows removed: mobile buttons + keybinds cover
     -- them. Every _GACC.safeCarryVisual / safeLaggerVisual call site is
     -- nil-guarded, so they simply no-op now.
