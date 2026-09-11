@@ -1,10 +1,12 @@
 -- RITUAL HUB UPDATED BACKEND
 -- New TP Bat + Bat Aimbot + Speed Constraint + Anti Die + Anti Fling
 -- V3 SPEED FIX: authoritative mode state + live GUI speed values; no stale Carry latch.
+-- cridts to anas 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
 local Lighting = game:GetService("Lighting")
 local HS = game:GetService("HttpService")
 local player = Players.LocalPlayer
@@ -1756,42 +1758,33 @@ local function setupSpeedIndicator(char)
 end
 
 -- ==================== SPEED MODE STATE ====================
--- One authoritative mode prevents Carry from remaining latched after a toggle.
--- The numeric values below are always read from the live GUI variables NS/CS/
--- LAGGER_SPEED/LAGGER_CARRY_SPEED, so changing the GUI immediately changes
--- the active speed.
+-- speedMode is the single source of truth. The legacy booleans are mirrors only.
+-- GUI edits always change the live numeric variables used by movement.
 local speedMode = "Normal"
 
 local function setSpeedMode(mode)
     if mode ~= "Normal" and mode ~= "Carry" and mode ~= "Lagger" and mode ~= "Lagger Carry" then
         mode = "Normal"
     end
-
     speedMode = mode
     carrySpeedActive = (mode == "Carry" or mode == "Lagger Carry")
     laggerModeEnabled = (mode == "Lagger" or mode == "Lagger Carry")
-
     if refreshSpeedModeLabel then refreshSpeedModeLabel() end
+    if _GACC.safeCarryVisual then pcall(_GACC.safeCarryVisual, mode=="Carry") end
+    if _GACC.safeLaggerVisual then pcall(_GACC.safeLaggerVisual, mode=="Lagger") end
 end
 
 local function syncSpeedMode()
-    -- Compatibility: if another part of the script changed the legacy booleans,
-    -- convert that change into the authoritative mode once.
-    local expectedCarry = (speedMode == "Carry" or speedMode == "Lagger Carry")
-    local expectedLagger = (speedMode == "Lagger" or speedMode == "Lagger Carry")
-
-    if carrySpeedActive ~= expectedCarry or laggerModeEnabled ~= expectedLagger then
-        if laggerModeEnabled and carrySpeedActive then
-            speedMode = "Lagger Carry"
-        elseif laggerModeEnabled then
-            speedMode = "Lagger"
-        elseif carrySpeedActive then
-            speedMode = "Carry"
-        else
-            speedMode = "Normal"
-        end
-        carrySpeedActive = (speedMode == "Carry" or speedMode == "Lagger Carry")
-        laggerModeEnabled = (speedMode == "Lagger" or speedMode == "Lagger Carry")
+    -- Never let stale legacy booleans overwrite the authoritative mode.
+    -- They are kept synchronized by setSpeedMode().
+    if speedMode ~= "Normal" and speedMode ~= "Carry" and speedMode ~= "Lagger" and speedMode ~= "Lagger Carry" then
+        speedMode = "Normal"
+    end
+    local wantCarry = (speedMode == "Carry" or speedMode == "Lagger Carry")
+    local wantLagger = (speedMode == "Lagger" or speedMode == "Lagger Carry")
+    if carrySpeedActive ~= wantCarry or laggerModeEnabled ~= wantLagger then
+        carrySpeedActive = wantCarry
+        laggerModeEnabled = wantLagger
     end
     return speedMode
 end
@@ -1799,64 +1792,73 @@ end
 local function getActiveMoveSpeed()
     local mode = syncSpeedMode()
     if mode == "Lagger Carry" then
-        return tonumber(LAGGER_CARRY_SPEED) or 0
+        return math.max(0, tonumber(LAGGER_CARRY_SPEED) or 0)
     elseif mode == "Lagger" then
-        return tonumber(LAGGER_SPEED) or 0
+        return math.max(0, tonumber(LAGGER_SPEED) or 0)
     elseif mode == "Carry" then
-        return tonumber(CS) or 0
+        return math.max(0, tonumber(CS) or 0)
     else
-        return tonumber(NS) or 0
+        return math.max(0, tonumber(NS) or 0)
     end
 end
 
 local function _validateSpeedState()
-    local mode=syncSpeedMode()
-    if mode=="Normal" then
-        assert(not carrySpeedActive and not laggerModeEnabled)
-    elseif mode=="Carry" then
-        assert(carrySpeedActive and not laggerModeEnabled)
-    elseif mode=="Lagger" then
-        assert(laggerModeEnabled and not carrySpeedActive)
-    elseif mode=="Lagger Carry" then
-        assert(laggerModeEnabled and carrySpeedActive)
-    end
-    return mode
+    return syncSpeedMode()
 end
 
 local function getAutoPathSpeed()
     local mode = syncSpeedMode()
     if mode == "Lagger Carry" then
-        return tonumber(LAGGER_CARRY_SPEED) or 0
+        return math.max(0, tonumber(LAGGER_CARRY_SPEED) or 0)
     elseif mode == "Lagger" then
-        return tonumber(LAGGER_SPEED) or 0
+        return math.max(0, tonumber(LAGGER_SPEED) or 0)
     else
-        return tonumber(NS) or 0
+        return math.max(0, tonumber(NS) or 0)
     end
 end
 end
-
-do 
+do
 local _autoSwitchWasSteal=false
+local _autoSwitchSavedMode=nil
+
 local function updateAutoSwitchSpeed()
     if not autoSwitchSpeedEnabled then
-        _autoSwitchWasSteal = false
+        if _autoSwitchWasSteal then
+            setSpeedMode(_autoSwitchSavedMode or "Normal")
+        end
+        _autoSwitchWasSteal=false
+        _autoSwitchSavedMode=nil
         return
     end
-    local char=LP.Character;if not char then return end
-    local h=char:FindFirstChildOfClass("Humanoid");if not h then return end
+
+    local char=LP.Character
+    if not char then return end
+    local h=char:FindFirstChildOfClass("Humanoid")
+    if not h then return end
+
     local isStealSpeed=h.WalkSpeed<25
     if isStealSpeed==_autoSwitchWasSteal then return end
     _autoSwitchWasSteal=isStealSpeed
+
     if isStealSpeed then
+        if not _autoSwitchSavedMode then _autoSwitchSavedMode=speedMode end
         setSpeedMode("Carry")
     else
-        setSpeedMode("Normal")
+        setSpeedMode(_autoSwitchSavedMode or "Normal")
+        _autoSwitchSavedMode=nil
     end
+
     if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
     if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
 end
-task.spawn(function() while true do task.wait(0.1);updateAutoSwitchSpeed() end end)
-end 
+
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        updateAutoSwitchSpeed()
+    end
+end)
+end
 
 local function startHoldInfJump()
     if holdInfJumpConn then holdInfJumpConn:Disconnect() end
@@ -3343,13 +3345,27 @@ end
     end
 
     local function disableCarry()
-        if not state.applied and not state.waiting then return end
-        local wasApplied=state.applied;local saved=state.savedMode
-        state.applied=false;state.waiting=false;state.watchUntil=0;state.graceUntil=0;state.savedMode=nil
-        if not wasApplied then return end
-        if saved=="Lagger" or saved=="Lagger Carry" then setModes(true,false)
-        elseif saved=="Carry" then setModes(false,true)
-        else setModes(false,false) end
+        local wasApplied=state.applied
+        local saved=state.savedMode
+        state.applied=false
+        state.waiting=false
+        state.watchUntil=0
+        state.graceUntil=0
+        state.savedMode=nil
+
+        if wasApplied then
+            if saved=="Lagger" or saved=="Lagger Carry" then
+                setModes(true,false)
+            elseif saved=="Carry" then
+                setModes(false,true)
+            else
+                setModes(false,false)
+            end
+        elseif not _GACC.autoCarrySpeedEnabled then
+            -- If the feature was disabled while another callback was changing
+            -- state, force the authoritative mode back to its current mirror.
+            syncSpeedMode()
+        end
     end
 
     _GACC.autoCarryWatch=function(seconds)
@@ -3383,7 +3399,7 @@ saveConfig=function()
         elseif e.gp then return {gp=e.gp.Name}
         else return {kb=nil,gp=nil} end
     end
-    local cfg={normalSpeed=NS,carrySpeed=CS,dropBrainrotKey=ks(KB.DropBrainrot),autoLeftKey=ks(KB.AutoLeft),autoRightKey=ks(KB.AutoRight),autoBatKey=ks(KB.AutoBat),laggerToggleKey=ks(KB.LaggerToggle),tpFloorKey=ks(KB.TPFloor),guiHideKey=ks(KB.GuiHide),speedToggleKey=ks(KB.SpeedToggle),grabRadius=Steal.StealRadius,stealDuration=Steal.StealDuration,stealMode=stealMode,antiRagdoll=antiRagdollEnabled,autoStealEnabled=Steal.AutoStealEnabled,infiniteJump=infJumpEnabled,infJumpMode=infJumpMode,medusaCounter=medusaCounterEnabled,carrySpeedActive=carrySpeedActive,laggerModeEnabled=laggerModeEnabled,laggerSpeed=LAGGER_SPEED,laggerCarrySpeed=LAGGER_CARRY_SPEED,autoBat=autoBatEnabled,autoSwing=autoSwingEnabled,unwalkEnabled=unwalkEnabled,antiLag=antiLagEnabled,stretchRez=stretchRezEnabled,autoTPEnabled=autoTPEnabled,autoTPHeight=autoTPHeight,guiTransparencyEnabled=guiTransparencyEnabled,mobileButtonsEnabled=mobileButtonsEnabled,mobileButtonsLocked=mobileButtonsLocked,mobileButtonsSize=mobileButtonsSize,circleButtonsEnabled=circleButtonsEnabled,autoSwitchSpeed=autoSwitchSpeedEnabled,fovValue=fovValue,perButtonDrag=perButtonDragEnabled,skyTheme=currentSkyTheme,medusaReset=medusaResetEnabled,autoMoveSwing=autoMoveSwingEnabled,autoMoveSwingInterval=autoMoveSwingInterval,ragdollGui=ragdollGuiEnabled,introSoundEnabled=introSoundEnabled,animEnabled=false,animationPack=_GACC.extras.getPack(),headlessEnabled=_GACC.extras.getHeadless(),korbloxEnabled=_GACC.extras.getKorblox(),backgroundEnabled=backgroundEnabled,backgroundIndex=backgroundIndex,colorThemeName=currentColorTheme,keys=(function() if not _GuiKeys then return {} end;local t={};for k,v in pairs(_GuiKeys) do t[k]=v.Name end;return t end)()}
+    local cfg={speedMode=speedMode,normalSpeed=NS,carrySpeed=CS,dropBrainrotKey=ks(KB.DropBrainrot),autoLeftKey=ks(KB.AutoLeft),autoRightKey=ks(KB.AutoRight),autoBatKey=ks(KB.AutoBat),laggerToggleKey=ks(KB.LaggerToggle),tpFloorKey=ks(KB.TPFloor),guiHideKey=ks(KB.GuiHide),speedToggleKey=ks(KB.SpeedToggle),grabRadius=Steal.StealRadius,stealDuration=Steal.StealDuration,stealMode=stealMode,antiRagdoll=antiRagdollEnabled,autoStealEnabled=Steal.AutoStealEnabled,infiniteJump=infJumpEnabled,infJumpMode=infJumpMode,medusaCounter=medusaCounterEnabled,carrySpeedActive=carrySpeedActive,laggerModeEnabled=laggerModeEnabled,laggerSpeed=LAGGER_SPEED,laggerCarrySpeed=LAGGER_CARRY_SPEED,autoBat=autoBatEnabled,autoSwing=autoSwingEnabled,unwalkEnabled=unwalkEnabled,antiLag=antiLagEnabled,stretchRez=stretchRezEnabled,autoTPEnabled=autoTPEnabled,autoTPHeight=autoTPHeight,guiTransparencyEnabled=guiTransparencyEnabled,mobileButtonsEnabled=mobileButtonsEnabled,mobileButtonsLocked=mobileButtonsLocked,mobileButtonsSize=mobileButtonsSize,circleButtonsEnabled=circleButtonsEnabled,autoSwitchSpeed=autoSwitchSpeedEnabled,fovValue=fovValue,perButtonDrag=perButtonDragEnabled,skyTheme=currentSkyTheme,medusaReset=medusaResetEnabled,autoMoveSwing=autoMoveSwingEnabled,autoMoveSwingInterval=autoMoveSwingInterval,ragdollGui=ragdollGuiEnabled,introSoundEnabled=introSoundEnabled,animEnabled=false,animationPack=_GACC.extras.getPack(),headlessEnabled=_GACC.extras.getHeadless(),korbloxEnabled=_GACC.extras.getKorblox(),backgroundEnabled=backgroundEnabled,backgroundIndex=backgroundIndex,colorThemeName=currentColorTheme,keys=(function() if not _GuiKeys then return {} end;local t={};for k,v in pairs(_GuiKeys) do t[k]=v.Name end;return t end)()}
     cfg.playerHighlightEnabled=_GACC.playerHighlightEnabled
     cfg.autoCarrySpeedEnabled=_GACC.autoCarrySpeedEnabled
     cfg.opRadius=SemiSteal.CONFIG.RADIUS
@@ -3412,8 +3428,12 @@ end
 task.spawn(function() while task.wait(5) do saveConfig() end end)
 
 local function resetAllSettings()
-    NS=59;CS=29;LAGGER_SPEED=30;LAGGER_CARRY_SPEED=15;setSpeedMode("Normal")
-    autoSwitchSpeedEnabled=false;antiRagdollEnabled=false;infJumpEnabled=false;infJumpMode="manual"
+    NS=59;CS=29;LAGGER_SPEED=30;LAGGER_CARRY_SPEED=15
+    autoSwitchSpeedEnabled=false
+    _GACC.autoCarrySpeedEnabled=false
+    if _GACC.disableAutoCarry then pcall(_GACC.disableAutoCarry) end
+    setSpeedMode("Normal")
+    antiRagdollEnabled=false;infJumpEnabled=false;infJumpMode="manual"
     medusaCounterEnabled=false;unwalkEnabled=false
     autoLeftEnabled=false;autoRightEnabled=false;autoBatEnabled=false;autoSwingEnabled=true;autoMoveSwingEnabled=false
     autoTPEnabled=false;autoTPHeight=20;antiLagEnabled=false;stretchRezEnabled=false
@@ -4240,7 +4260,9 @@ pcall(function()
     if type(d.carrySpeed)=="number" and d.carrySpeed>0 then CS=d.carrySpeed end
     if type(d.laggerSpeed)=="number" and d.laggerSpeed>0 then LAGGER_SPEED=d.laggerSpeed end
     if type(d.laggerCarrySpeed)=="number" and d.laggerCarrySpeed>0 then LAGGER_CARRY_SPEED=d.laggerCarrySpeed end
-    if type(d.laggerModeEnabled)=="boolean" or type(d.carrySpeedActive)=="boolean" then
+    if type(d.speedMode)=="string" then
+        setSpeedMode(d.speedMode)
+    elseif type(d.laggerModeEnabled)=="boolean" or type(d.carrySpeedActive)=="boolean" then
         local savedLagger = d.laggerModeEnabled == true
         local savedCarry = d.carrySpeedActive == true
         if savedLagger and savedCarry then
@@ -5549,13 +5571,51 @@ local profileLine=Instance.new("Frame",userF)
     do
     local sp=CategoryRefs.contents["Speed"]
     local b=mkSection(sp,"SPEED CONFIGURATION",0)
-    addInputRow(b,"Normal Speed",NS,1,function(v) NS=tonumber(v) or NS; saveConfig() end)
-    addInputRow(b,"Carry Speed",CS,2,function(v) CS=tonumber(v) or CS; saveConfig() end)
-    addInputRow(b,"Lagger Normal",LAGGER_SPEED,3,function(v) LAGGER_SPEED=tonumber(v) or LAGGER_SPEED; saveConfig() end)
-    addInputRow(b,"Lagger Carry",LAGGER_CARRY_SPEED,4,function(v) LAGGER_CARRY_SPEED=tonumber(v) or LAGGER_CARRY_SPEED; saveConfig() end)
-    -- Carry Mode / Lagger Mode rows removed: mobile buttons + keybinds cover
-    -- them. Every _GACC.safeCarryVisual / safeLaggerVisual call site is
-    -- nil-guarded, so they simply no-op now.
+    addInputRow(b,"Normal Speed",NS,1,function(v)
+        local n=tonumber(v)
+        if n and n>=0 then NS=n end
+        saveConfig()
+    end)
+    addInputRow(b,"Carry Speed",CS,2,function(v)
+        local n=tonumber(v)
+        if n and n>=0 then CS=n end
+        saveConfig()
+    end)
+    addInputRow(b,"Lagger Normal",LAGGER_SPEED,3,function(v)
+        local n=tonumber(v)
+        if n and n>=0 then LAGGER_SPEED=n end
+        saveConfig()
+    end)
+    addInputRow(b,"Lagger Carry",LAGGER_CARRY_SPEED,4,function(v)
+        local n=tonumber(v)
+        if n and n>=0 then LAGGER_CARRY_SPEED=n end
+        saveConfig()
+    end)
+
+    local _,carryVisual=addToggleRow(b,"Carry Mode",speedMode=="Carry",5,nil,function(on)
+        if on then
+            setSpeedMode("Carry")
+        elseif speedMode=="Carry" then
+            setSpeedMode("Normal")
+        end
+        if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(speedMode=="Carry") end
+        if mobBtnRefs.lagger then mobBtnRefs.lagger(speedMode=="Lagger") end
+        saveConfig()
+    end)
+    _GACC.safeCarryVisual=carryVisual
+
+    local _,laggerVisual=addToggleRow(b,"Lagger Mode",speedMode=="Lagger",6,nil,function(on)
+        if on then
+            setSpeedMode("Lagger")
+        elseif speedMode=="Lagger" then
+            setSpeedMode("Normal")
+        end
+        if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(speedMode=="Carry") end
+        if mobBtnRefs.lagger then mobBtnRefs.lagger(speedMode=="Lagger") end
+        saveConfig()
+    end)
+    _GACC.safeLaggerVisual=laggerVisual
+
     local _,autoCarryVisual=addToggleRow(b,"Auto Carry Speed",_GACC.autoCarrySpeedEnabled,7,nil,function(on)
         _GACC.autoCarrySpeedEnabled=on
         if not on and _GACC.disableAutoCarry then _GACC.disableAutoCarry() end
