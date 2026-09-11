@@ -13,92 +13,74 @@ local HS = game:GetService("HttpService")
 local player = Players.LocalPlayer
 
 -- ============================================================
--- RITUAL HUB STARTUP GUARD / GUI RECOVERY
--- Prevents a bad saved UI position or an executor-specific GUI
--- parenting issue from making the whole script appear to do nothing.
+-- EARLY STARTUP GUARD
+-- The original script builds the main GUI very late in the file.
+-- If anything fails before that point, the executor can look like
+-- nothing happened. This tiny GUI appears immediately and reports
+-- a runtime failure instead of silently disappearing.
 -- ============================================================
-task.spawn(function()
-    local ok = pcall(function()
-        repeat task.wait() until game:IsLoaded()
-        local pg = player:WaitForChild("PlayerGui", 15)
-        if not pg then return end
+local __RITUAL_BOOT_GUI
+local __RITUAL_BOOT_STATUS
+pcall(function()
+    local pg = player and player:WaitForChild("PlayerGui", 10)
+    if not pg then return end
+    local old = pg:FindFirstChild("RitualHubStartup")
+    if old then old:Destroy() end
 
-        -- Give the main initializer a moment to create its GUI.
-        task.wait(1.25)
+    __RITUAL_BOOT_GUI = Instance.new("ScreenGui")
+    __RITUAL_BOOT_GUI.Name = "RitualHubStartup"
+    __RITUAL_BOOT_GUI.ResetOnSpawn = false
+    __RITUAL_BOOT_GUI.IgnoreGuiInset = true
+    __RITUAL_BOOT_GUI.DisplayOrder = 10000
+    __RITUAL_BOOT_GUI.Parent = pg
 
-        local gui = pg:FindFirstChild("RitualHub")
-        local core = game:GetService("CoreGui")
-        if not gui then
-            gui = core:FindFirstChild("RitualHub")
-        end
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.fromOffset(270, 72)
+    frame.Position = UDim2.fromOffset(18, 70)
+    frame.BackgroundColor3 = Color3.fromRGB(7, 15, 24)
+    frame.BorderSizePixel = 0
+    frame.Parent = __RITUAL_BOOT_GUI
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
 
-        if gui then
-            gui.Enabled = true
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1, -20, 0, 25)
+    title.Position = UDim2.fromOffset(10, 7)
+    title.BackgroundTransparency = 1
+    title.Text = "RITUAL HUB"
+    title.TextColor3 = Color3.fromRGB(120, 190, 255)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 15
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Parent = frame
 
-            local outer = gui:FindFirstChild("Outer", true)
-            if outer and outer:IsA("GuiObject") then
-                -- A previously saved position can be outside the viewport.
-                local p = outer.Position
-                if p.X.Scale < -0.5 or p.X.Scale > 1.5
-                    or p.Y.Scale < -0.5 or p.Y.Scale > 1.5
-                    or p.X.Offset < -500 or p.X.Offset > 3000
-                    or p.Y.Offset < -500 or p.Y.Offset > 3000 then
-                    outer.Position = UDim2.new(0, 20, 0, 80)
-                end
-                outer.Visible = true
-            end
-            return
-        end
-
-        -- If initialization stopped before the main ScreenGui was created,
-        -- leave a small visible recovery panel instead of silently failing.
-        local recovery = Instance.new("ScreenGui")
-        recovery.Name = "RitualHub"
-        recovery.ResetOnSpawn = false
-        recovery.IgnoreGuiInset = true
-        recovery.DisplayOrder = 10000
-
-        local parented = pcall(function()
-            recovery.Parent = core
-        end)
-        if not parented then
-            recovery.Parent = pg
-        end
-
-        local panel = Instance.new("Frame")
-        panel.Name = "StartupRecovery"
-        panel.Size = UDim2.fromOffset(300, 120)
-        panel.Position = UDim2.new(0, 20, 0, 80)
-        panel.BackgroundColor3 = Color3.fromRGB(7, 15, 24)
-        panel.BorderSizePixel = 0
-        panel.Parent = recovery
-        Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 12)
-
-        local title = Instance.new("TextLabel")
-        title.Size = UDim2.new(1, -24, 0, 30)
-        title.Position = UDim2.fromOffset(12, 10)
-        title.BackgroundTransparency = 1
-        title.Text = "RITUAL HUB"
-        title.TextColor3 = Color3.fromRGB(120, 190, 255)
-        title.Font = Enum.Font.GothamBold
-        title.TextSize = 18
-        title.TextXAlignment = Enum.TextXAlignment.Left
-        title.Parent = panel
-
-        local status = Instance.new("TextLabel")
-        status.Size = UDim2.new(1, -24, 0, 42)
-        status.Position = UDim2.fromOffset(12, 48)
-        status.BackgroundTransparency = 1
-        status.Text = "GUI initialization stopped early.\nRe-execute the script once."
-        status.TextColor3 = Color3.fromRGB(220, 225, 235)
-        status.Font = Enum.Font.GothamMedium
-        status.TextSize = 12
-        status.TextWrapped = true
-        status.TextXAlignment = Enum.TextXAlignment.Left
-        status.TextYAlignment = Enum.TextYAlignment.Top
-        status.Parent = panel
-    end)
+    __RITUAL_BOOT_STATUS = Instance.new("TextLabel")
+    __RITUAL_BOOT_STATUS.Size = UDim2.new(1, -20, 0, 28)
+    __RITUAL_BOOT_STATUS.Position = UDim2.fromOffset(10, 34)
+    __RITUAL_BOOT_STATUS.BackgroundTransparency = 1
+    __RITUAL_BOOT_STATUS.Text = "Starting..."
+    __RITUAL_BOOT_STATUS.TextColor3 = Color3.fromRGB(220, 225, 235)
+    __RITUAL_BOOT_STATUS.Font = Enum.Font.GothamMedium
+    __RITUAL_BOOT_STATUS.TextSize = 11
+    __RITUAL_BOOT_STATUS.TextXAlignment = Enum.TextXAlignment.Left
+    __RITUAL_BOOT_STATUS.Parent = frame
 end)
+
+local function __RitualBootFail(err)
+    warn("[RitualHub] startup/runtime error:\n" .. tostring(err))
+    pcall(function()
+        if __RITUAL_BOOT_STATUS then
+            __RITUAL_BOOT_STATUS.Text = "Startup error — check executor console"
+            __RITUAL_BOOT_STATUS.TextColor3 = Color3.fromRGB(255, 120, 120)
+        end
+    end)
+end
+
+local function __RitualBootClear()
+    pcall(function()
+        if __RITUAL_BOOT_GUI then __RITUAL_BOOT_GUI:Destroy() end
+    end)
+end
+
 
 local _GACC = {}
 
@@ -1904,7 +1886,6 @@ local function getAutoPathSpeed()
     else
         return math.max(0, tonumber(NS) or 0)
     end
-end
 end
 do
 local _autoSwitchWasSteal=false
@@ -4559,8 +4540,7 @@ _GACC.GuiToggleSetters = {}
     local GuiHub=Instance.new("ScreenGui")
     GuiHub.Name="RitualHub"; GuiHub.ResetOnSpawn=false
     GuiHub.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
-    local _guiParentOk=pcall(function() GuiHub.Parent=game:GetService("CoreGui") end)
-    if not _guiParentOk then GuiHub.Parent=PlayerGui end
+    GuiHub.Parent=PlayerGui
     GuiRefs.hub=GuiHub
 
     local Outer=Instance.new("Frame")
@@ -6690,9 +6670,10 @@ if infJumpEnabled then startHoldInfJump() end
 if antiRagdollEnabled then startAntiRagdoll() end
 if _GACC.batCounterEnabled then _GACC.startBatCounter() end
 if medusaCounterEnabled then setupMedusa(LP.Character) end
-applyBackgroundImage()
-if _GACC.playerHighlightEnabled then _GACC.startESP() end
-CandyApplyCustomSky(currentSkyTheme)
+pcall(applyBackgroundImage)
+if _GACC.playerHighlightEnabled then pcall(_GACC.startESP) end
+pcall(function() CandyApplyCustomSky(currentSkyTheme) end)
+__RitualBootClear()
 
 -- Apply initial scales
 if _GACC.menuScaleObj then _GACC.menuScaleObj.Scale = menuScale end
@@ -6706,3 +6687,24 @@ if antiDieEnabled then
         startAntiDie()
     end)
 end
+
+-- Final GUI recovery: if an executor/game event hid the menu during startup,
+-- restore it without touching any feature state.
+task.defer(function()
+    pcall(function()
+        local pg = LP and LP:FindFirstChild("PlayerGui")
+        local gui = pg and pg:FindFirstChild("RitualHub")
+        if not gui then gui = game:GetService("CoreGui"):FindFirstChild("RitualHub") end
+        if gui then
+            gui.Enabled = true
+            local outer = gui:FindFirstChild("Outer", true)
+            if outer and outer:IsA("GuiObject") then
+                outer.Visible = true
+                local pos = outer.Position
+                if pos.X.Offset < -500 or pos.X.Offset > 3000 or pos.Y.Offset < -500 or pos.Y.Offset > 3000 then
+                    outer.Position = UDim2.new(0,20,0,80)
+                end
+            end
+        end
+    end)
+end)
