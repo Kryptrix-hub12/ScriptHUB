@@ -1,7 +1,7 @@
 -- RITUAL HUB UPDATED BACKEND
 -- New TP Bat + Bat Aimbot + Speed Constraint + Anti Die + Anti Fling
 -- V3 SPEED FIX: authoritative mode state + live GUI speed values; no stale Carry latch.
-
+-- cridts to anas 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UIS = game:GetService("UserInputService")
@@ -1833,6 +1833,7 @@ end
 -- GUI edits always change the live numeric variables used by movement.
 local speedMode = "Normal"
 local manualSpeedOverride = false
+local applyActiveHumanoidSpeed
 
 local function setSpeedMode(mode)
     if mode ~= "Normal" and mode ~= "Carry" and mode ~= "Lagger" and mode ~= "Lagger Carry" then
@@ -1845,6 +1846,12 @@ local function setSpeedMode(mode)
     speedMode = mode
     carrySpeedActive = (mode == "Carry" or mode == "Lagger Carry")
     laggerModeEnabled = (mode == "Lagger" or mode == "Lagger Carry")
+
+    -- Also apply the selected speed directly to the Humanoid. The previous
+    -- fix only cleared movement constraints; if the game resets/holds
+    -- Humanoid.WalkSpeed at its default (often 16), the selected mode could
+    -- still appear stuck at 16.
+    if applyActiveHumanoidSpeed then pcall(applyActiveHumanoidSpeed) end
 
     pcall(function()
         local char = LP and LP.Character
@@ -1894,6 +1901,24 @@ end
 
 local function _validateSpeedState()
     return syncSpeedMode()
+end
+
+applyActiveHumanoidSpeed = function()
+    local char = LP and LP.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    local mode = syncSpeedMode()
+    local speed
+    if mode == "Lagger Carry" then
+        speed = tonumber(LAGGER_CARRY_SPEED) or 15
+    elseif mode == "Lagger" then
+        speed = tonumber(LAGGER_SPEED) or 30
+    elseif mode == "Carry" then
+        speed = tonumber(CS) or 29
+    else
+        speed = tonumber(NS) or 59
+    end
+    if speed >= 0 then hum.WalkSpeed = speed end
 end
 
 local function getAutoPathSpeed()
@@ -2899,6 +2924,12 @@ local function applyCFrameMove(part,dirUnit,spd,dt)
         flat.Unit*spd
     )
 end
+
+-- Keep the selected speed applied. This is deliberately small and only
+-- writes WalkSpeed; it does not alter the selected mode or toggle state.
+RunService.Heartbeat:Connect(function()
+    pcall(function() applyActiveHumanoidSpeed() end)
+end)
 
 -- ==================== ANTI-FLING ====================
 -- Normal movement remains untouched. Only unusually large horizontal/
@@ -4111,6 +4142,7 @@ local function setupMobileButtons()
             if on then runTPFloor() end
         end,
         CarrySpeed = function(on)
+            manualSpeedOverride=true
             setSpeedMode(on and "Carry" or "Normal")
             if _GACC.safeCarryVisual then _GACC.safeCarryVisual(carrySpeedActive) end
             if _GACC.safeLaggerVisual then _GACC.safeLaggerVisual(laggerModeEnabled) end
@@ -4118,6 +4150,7 @@ local function setupMobileButtons()
             if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
         end,
         LaggerNormal = function(on)
+            manualSpeedOverride=true
             setSpeedMode(on and "Lagger" or "Normal")
             if _GACC.safeLaggerVisual then _GACC.safeLaggerVisual(laggerModeEnabled) end
             if _GACC.safeCarryVisual then _GACC.safeCarryVisual(carrySpeedActive) end
@@ -4125,6 +4158,7 @@ local function setupMobileButtons()
             if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
         end,
         LaggerCarry = function(on)
+            manualSpeedOverride=true
             setSpeedMode(on and "Lagger Carry" or "Normal")
             if _GACC.safeLaggerVisual then _GACC.safeLaggerVisual(laggerModeEnabled) end
             if _GACC.safeCarryVisual then _GACC.safeCarryVisual(carrySpeedActive) end
@@ -5706,11 +5740,13 @@ local profileLine=Instance.new("Frame",userF)
     addInputRow(b,"Normal Speed",NS,1,function(v)
         local n=tonumber(v)
         if n and n>=0 then NS=n end
+        pcall(applyActiveHumanoidSpeed)
         saveConfig()
     end)
     addInputRow(b,"Carry Speed",CS,2,function(v)
         local n=tonumber(v)
         if n and n>=0 then CS=n end
+        pcall(applyActiveHumanoidSpeed)
         saveConfig()
     end)
     addInputRow(b,"Lagger Normal",LAGGER_SPEED,3,function(v)
