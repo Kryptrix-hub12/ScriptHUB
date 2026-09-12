@@ -1832,6 +1832,7 @@ end
 -- speedMode is the single source of truth. The legacy booleans are mirrors only.
 -- GUI edits always change the live numeric variables used by movement.
 local speedMode = "Normal"
+local manualSpeedOverride = false
 
 local function setSpeedMode(mode)
     if mode ~= "Normal" and mode ~= "Carry" and mode ~= "Lagger" and mode ~= "Lagger Carry" then
@@ -1910,6 +1911,7 @@ local _autoSwitchWasSteal=false
 local _autoSwitchSavedMode=nil
 
 local function updateAutoSwitchSpeed()
+    if manualSpeedOverride then return end
     if not autoSwitchSpeedEnabled then
         if _autoSwitchWasSteal then
             setSpeedMode(_autoSwitchSavedMode or "Normal")
@@ -3468,6 +3470,10 @@ end
     _GACC.disableAutoCarry=disableCarry
 
     RunService.RenderStepped:Connect(function()
+        if manualSpeedOverride then
+            if state.applied then disableCarry() end
+            return
+        end
         if not _GACC.autoCarrySpeedEnabled then disableCarry();return end
         local char=LP.Character;local hum=char and char:FindFirstChildOfClass("Humanoid");local root=char and char:FindFirstChild("HumanoidRootPart")
         if not char or not hum or not root then disableCarry();state.stealWasActive=false;return end
@@ -3523,6 +3529,7 @@ task.spawn(function() while task.wait(5) do saveConfig() end end)
 local function resetAllSettings()
     NS=59;CS=29;LAGGER_SPEED=30;LAGGER_CARRY_SPEED=15
     autoSwitchSpeedEnabled=false
+    manualSpeedOverride=false
     _GACC.autoCarrySpeedEnabled=false
     if _GACC.disableAutoCarry then pcall(_GACC.disableAutoCarry) end
     setSpeedMode("Normal")
@@ -3580,25 +3587,46 @@ refreshSpeedModeLabel=function()
 end
 
 toggleCarryMode=function()
-    -- Carry is independent: Normal <-> Carry.
+    -- Manual toggle always wins over automatic carry/speed switching.
+    manualSpeedOverride = true
     local mode = syncSpeedMode()
     if mode == "Carry" then
         setSpeedMode("Normal")
     else
         setSpeedMode("Carry")
     end
+    local char=LP.Character
+    local root=char and char:FindFirstChild("HumanoidRootPart")
+    if root then
+        pcall(function()
+            local lv=root:FindFirstChild("_RHSpeedLV")
+            if lv then lv:Destroy() end
+            local v=root.AssemblyLinearVelocity
+            root.AssemblyLinearVelocity=Vector3.new(0,v.Y,0)
+        end)
+    end
     if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
     if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
 end
 
 toggleLaggerMode=function()
-    -- Lagger is independent: Normal <-> Lagger.
-    -- Turning Lagger on always clears Carry.
+    -- Manual toggle always wins over automatic carry/speed switching.
+    manualSpeedOverride = true
     local mode = syncSpeedMode()
     if mode == "Lagger" then
         setSpeedMode("Normal")
     else
         setSpeedMode("Lagger")
+    end
+    local char=LP.Character
+    local root=char and char:FindFirstChild("HumanoidRootPart")
+    if root then
+        pcall(function()
+            local lv=root:FindFirstChild("_RHSpeedLV")
+            if lv then lv:Destroy() end
+            local v=root.AssemblyLinearVelocity
+            root.AssemblyLinearVelocity=Vector3.new(0,v.Y,0)
+        end)
     end
     if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
     if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
@@ -5697,6 +5725,7 @@ local profileLine=Instance.new("Frame",userF)
     end)
 
     local _,carryVisual=addToggleRow(b,"Carry Mode",speedMode=="Carry",5,nil,function(on)
+        manualSpeedOverride=true
         if on then
             setSpeedMode("Carry")
         elseif speedMode=="Carry" then
@@ -5709,6 +5738,7 @@ local profileLine=Instance.new("Frame",userF)
     _GACC.safeCarryVisual=carryVisual
 
     local _,laggerVisual=addToggleRow(b,"Lagger Mode",speedMode=="Lagger",6,nil,function(on)
+        manualSpeedOverride=true
         if on then
             setSpeedMode("Lagger")
         elseif speedMode=="Lagger" then
@@ -5722,6 +5752,7 @@ local profileLine=Instance.new("Frame",userF)
 
     local _,autoCarryVisual=addToggleRow(b,"Auto Carry Speed",_GACC.autoCarrySpeedEnabled,7,nil,function(on)
         _GACC.autoCarrySpeedEnabled=on
+        if on then manualSpeedOverride=false end
         if not on and _GACC.disableAutoCarry then _GACC.disableAutoCarry() end
         saveConfig()
     end)
@@ -6713,6 +6744,29 @@ end
 
 -- Final GUI recovery: if an executor/game event hid the menu during startup,
 -- restore it without touching any feature state.
+
+-- Final speed-state watchdog: remove stale movement constraints whenever the
+-- authoritative mode changes, including after manual Carry/Lagger toggles.
+do
+    local lastObservedSpeedMode = speedMode
+    RunService.Heartbeat:Connect(function()
+        local mode = syncSpeedMode()
+        if mode ~= lastObservedSpeedMode then
+            lastObservedSpeedMode = mode
+            local char=LP.Character
+            local root=char and char:FindFirstChild("HumanoidRootPart")
+            if root then
+                pcall(function()
+                    local lv=root:FindFirstChild("_RHSpeedLV")
+                    if lv then lv:Destroy() end
+                    local v=root.AssemblyLinearVelocity
+                    root.AssemblyLinearVelocity=Vector3.new(0,v.Y,0)
+                end)
+            end
+        end
+    end)
+end
+
 task.defer(function()
     pcall(function()
         local pg = LP and LP:FindFirstChild("PlayerGui")
