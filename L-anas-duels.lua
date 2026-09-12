@@ -1,7 +1,7 @@
 -- RITUAL HUB UPDATED BACKEND
 -- New TP Bat + Bat Aimbot + Speed Constraint + Anti Die + Anti Fling
 -- V3 SPEED FIX: authoritative mode state + live GUI speed values; no stale Carry latch.
--- cridts to anas 
+
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UIS = game:GetService("UserInputService")
@@ -1837,12 +1837,30 @@ local function setSpeedMode(mode)
     if mode ~= "Normal" and mode ~= "Carry" and mode ~= "Lagger" and mode ~= "Lagger Carry" then
         mode = "Normal"
     end
+
+    -- IMPORTANT: changing the mode must also remove any movement constraint
+    -- left behind by a previous mode.  Otherwise an old LinearVelocity can
+    -- keep forcing the old Carry/Lagger speed even after the toggle is off.
     speedMode = mode
     carrySpeedActive = (mode == "Carry" or mode == "Lagger Carry")
     laggerModeEnabled = (mode == "Lagger" or mode == "Lagger Carry")
+
+    pcall(function()
+        local char = LP and LP.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local oldLV = hrp:FindFirstChild("_RHSpeedLV")
+            if oldLV then oldLV:Destroy() end
+            local v = hrp.AssemblyLinearVelocity
+            -- Preserve vertical velocity, but discard horizontal velocity from
+            -- the previous mode so the next frame starts from the new speed.
+            hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
+        end
+    end)
+
     if refreshSpeedModeLabel then refreshSpeedModeLabel() end
-    if _GACC.safeCarryVisual then pcall(_GACC.safeCarryVisual, mode=="Carry") end
-    if _GACC.safeLaggerVisual then pcall(_GACC.safeLaggerVisual, mode=="Lagger") end
+    if _GACC.safeCarryVisual then pcall(_GACC.safeCarryVisual, carrySpeedActive) end
+    if _GACC.safeLaggerVisual then pcall(_GACC.safeLaggerVisual, laggerModeEnabled) end
 end
 
 local function syncSpeedMode()
@@ -2943,8 +2961,13 @@ RunService.RenderStepped:Connect(function()
 
         if md.Magnitude>0 then
             lastMoveDir=md
+            -- The main movement path uses impulse-based speed control.  Never
+            -- leave an old LinearVelocity from Carry/Lagger/auto-path movement
+            -- alive while this path is active.
+            _speedLVClear(hrp)
             applyCFrameMove(hrp,md,spd,1/60)
         elseif antiRagdollEnabled and lastMoveDir.Magnitude>0 then
+            _speedLVClear(hrp)
             local anyHeld=false
             for key in pairs(MOVE_KEYS) do
                 if UIS:IsKeyDown(key) then
