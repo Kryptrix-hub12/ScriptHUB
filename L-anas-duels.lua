@@ -1,86 +1,10 @@
--- RITUAL HUB UPDATED BACKEND
--- New TP Bat + Bat Aimbot + Speed Constraint + Anti Die + Anti Fling
--- V3 SPEED FIX: authoritative mode state + live GUI speed values; no stale Carry latch.
--- cridts to anas 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UIS = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
 local Lighting = game:GetService("Lighting")
 local HS = game:GetService("HttpService")
-
 local player = Players.LocalPlayer
-
--- ============================================================
--- EARLY STARTUP GUARD
--- The original script builds the main GUI very late in the file.
--- If anything fails before that point, the executor can look like
--- nothing happened. This tiny GUI appears immediately and reports
--- a runtime failure instead of silently disappearing.
--- ============================================================
-local __RITUAL_BOOT_GUI
-local __RITUAL_BOOT_STATUS
-pcall(function()
-    local pg = player and player:WaitForChild("PlayerGui", 10)
-    if not pg then return end
-    local old = pg:FindFirstChild("RitualHubStartup")
-    if old then old:Destroy() end
-
-    __RITUAL_BOOT_GUI = Instance.new("ScreenGui")
-    __RITUAL_BOOT_GUI.Name = "RitualHubStartup"
-    __RITUAL_BOOT_GUI.ResetOnSpawn = false
-    __RITUAL_BOOT_GUI.IgnoreGuiInset = true
-    __RITUAL_BOOT_GUI.DisplayOrder = 10000
-    __RITUAL_BOOT_GUI.Parent = pg
-
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.fromOffset(270, 72)
-    frame.Position = UDim2.fromOffset(18, 70)
-    frame.BackgroundColor3 = Color3.fromRGB(7, 15, 24)
-    frame.BorderSizePixel = 0
-    frame.Parent = __RITUAL_BOOT_GUI
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
-
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, -20, 0, 25)
-    title.Position = UDim2.fromOffset(10, 7)
-    title.BackgroundTransparency = 1
-    title.Text = "RITUAL HUB"
-    title.TextColor3 = Color3.fromRGB(120, 190, 255)
-    title.Font = Enum.Font.GothamBold
-    title.TextSize = 15
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = frame
-
-    __RITUAL_BOOT_STATUS = Instance.new("TextLabel")
-    __RITUAL_BOOT_STATUS.Size = UDim2.new(1, -20, 0, 28)
-    __RITUAL_BOOT_STATUS.Position = UDim2.fromOffset(10, 34)
-    __RITUAL_BOOT_STATUS.BackgroundTransparency = 1
-    __RITUAL_BOOT_STATUS.Text = "Starting..."
-    __RITUAL_BOOT_STATUS.TextColor3 = Color3.fromRGB(220, 225, 235)
-    __RITUAL_BOOT_STATUS.Font = Enum.Font.GothamMedium
-    __RITUAL_BOOT_STATUS.TextSize = 11
-    __RITUAL_BOOT_STATUS.TextXAlignment = Enum.TextXAlignment.Left
-    __RITUAL_BOOT_STATUS.Parent = frame
-end)
-
-local function __RitualBootFail(err)
-    warn("[RitualHub] startup/runtime error:\n" .. tostring(err))
-    pcall(function()
-        if __RITUAL_BOOT_STATUS then
-            __RITUAL_BOOT_STATUS.Text = "Startup error — check executor console"
-            __RITUAL_BOOT_STATUS.TextColor3 = Color3.fromRGB(255, 120, 120)
-        end
-    end)
-end
-
-local function __RitualBootClear()
-    pcall(function()
-        if __RITUAL_BOOT_GUI then __RITUAL_BOOT_GUI:Destroy() end
-    end)
-end
-
 
 local _GACC = {}
 
@@ -365,11 +289,12 @@ local _GuiKeys = nil
 local pingNotification = nil
 local _perfFps,_perfPing=0,0
 
--- ========== ANTI DIE ==========
-local antiDieEnabled = false
-local antiDieConnections = {}  -- store all event connections
-local antiDieHeartbeat = nil
--- ================================
+-- ========== ANTI DIE + ANTI FLING STATE ==========
+local antiDieEnabled=false
+local antiFlingEnabled=false
+local dieConn=nil
+local flingConn=nil
+-- ================================================
 
 local bgImageRef = nil
 local bgImageContainer = nil 
@@ -982,265 +907,195 @@ _GACC.equipPreferredBatTool = function()
 end
 
 ;(function()
---  AUTO BAT / BAT AIMBOT BACKEND
+--  AUTO BAT / BAT AIMBOT BACKEND (new logic; no GUI added here)
 -- ============================================================
-local aimbotSpeed=58
-local CONFIG = {
-    FollowSpeed = 55, MaxSpeed = 59, ActivateDistance = 13, MinFollowDistance = 1,
-    PredictionTime = 0.18, PredictAhead = 1.75, JumpSpeedBoost = 1.5, ActivationDelay = 0.2,
-    ServerTickrate = 1/60, PingSampleSize = 10, MinPingComp = 0.03, MaxPingComp = 0.25,
-    VelocityHistorySize = 8, AccelHistorySize = 4, AerialHistorySize = 6, VerticalHistorySize = 5,
-    VelocitySmoothing = 0.2, AerialSmoothing = 0.15, MaxVelocityChange = 150, MaxHorizontalVel = 80,
-    AccelerationWeight = 0.3, Gravity = 196.2, AirControlFactor = 0.8, AerialVelocityDecay = 0.95,
-    AerialDirectionWeight = 0.6, MinAirborneTime = 0.08,
-}
-local State = {
-    TargetPlayer=nil, LastTargetPos=nil, TargetVelocity=Vector3.zero, SmoothedVelocity=Vector3.zero,
-    VelocityHistory={}, AirborneTime=0, LastActivationTime=0, HighYVelocityTime=0,
-    AccelerationHistory={}, LastDirectionChangeTime=0, PreviousDirection=nil,
-    WasAirborne=false, AerialVelocityHistory={}, AerialSmoothVelocity=Vector3.zero,
-    LastGroundedPosition=nil, LastYVelocity=0, PeakHeight=0, GroundHeight=0,
-    IsMultiJumping=false, VerticalVelocityHistory={},
-}
-local _aimbotTarget = nil
-local _aimbotTargetPlr = nil
-local aimbotConn = nil
+local AUTO_BAT_ENABLED=false
+local AUTO_BAT_SPEED=58
+local AUTO_BAT_VERT_SPEED=52
+local AUTO_BAT_DIST=-2.8
+local AUTO_BAT_HEIGHT=4.75
+local AUTO_BAT_V_OFF=1
+local AUTO_BAT_TURN_SPEED=285
+local AUTO_BAT_MAX_TURN_RATE=28
+local AUTO_SWING_ENABLED=true
 
-resetAutoBatMotion=function()
-	local char=LP.Character
-	local hrp=char and char:FindFirstChild("HumanoidRootPart")
-	local hum=char and char:FindFirstChildOfClass("Humanoid")
-	if hrp then
-		hrp.Velocity=hrp.Velocity*0.3
-		hrp.AssemblyAngularVelocity=Vector3.zero
-	end
-	if hum then hum.AutoRotate=true end
+local autoBatConnection=nil
+local autoBatEquipped=false
+local _autoBatTarget=nil
+local _autoBatLastScan=0
+local batTool=nil
+
+local function getCharacter() return LP.Character end
+local function getHumanoid()
+    local char=getCharacter()
+    return char and char:FindFirstChildOfClass("Humanoid")
+end
+local function getRootPart()
+    local char=getCharacter()
+    return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getAutoBatTarget()
+    local root=getRootPart()
+    if not root then return nil end
+    local now=tick()
+    if now-_autoBatLastScan<=0.1 and _autoBatTarget and _autoBatTarget.Parent then
+        local hum=_autoBatTarget.Parent:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health>0 then return _autoBatTarget end
+    end
+    _autoBatLastScan=now
+    _autoBatTarget=nil
+    local closest,minDist=nil,math.huge
+    for _,plr in ipairs(Players:GetPlayers()) do
+        if plr~=LP and plr.Character then
+            local tRoot=plr.Character:FindFirstChild("HumanoidRootPart")
+            local hum=plr.Character:FindFirstChildOfClass("Humanoid")
+            if tRoot and hum and hum.Health>0 then
+                local dist=(tRoot.Position-root.Position).Magnitude
+                if dist<minDist then minDist=dist;closest=tRoot end
+            end
+        end
+    end
+    _autoBatTarget=closest
+    return _autoBatTarget
 end
 
 local function findBat()
-	local char=LP.Character
-	if not char then return nil end
-	for _,tool in ipairs(char:GetChildren()) do
-		if tool:IsA("Tool") and (tool.Name:lower():find("bat") or tool.Name:lower():find("slap")) then return tool end
-	end
-	local bp=LP:FindFirstChild("Backpack")
-	if bp then
-		for _,tool in ipairs(bp:GetChildren()) do
-			if tool:IsA("Tool") and (tool.Name:lower():find("bat") or tool.Name:lower():find("slap")) then return tool end
-		end
-	end
-	return nil
+    local char=getCharacter()
+    if not char then return nil end
+    for _,tool in ipairs(char:GetChildren()) do
+        if tool:IsA("Tool") then
+            local name=tool.Name:lower()
+            if name:find("bat",1,true) or name:find("slap",1,true) then return tool end
+        end
+    end
+    local bp=LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+    if bp then
+        for _,tool in ipairs(bp:GetChildren()) do
+            if tool:IsA("Tool") then
+                local name=tool.Name:lower()
+                if name:find("bat",1,true) or name:find("slap",1,true) then return tool end
+            end
+        end
+    end
+    return nil
 end
 
-local function getClosestTarget()
-	local root=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-	if not root then return nil,nil end
-	local closest,closestPlr,minDist=nil,nil,math.huge
-	for _,plr in ipairs(Players:GetPlayers()) do
-		if plr~=LP and plr.Character then
-			local tRoot=plr.Character:FindFirstChild("HumanoidRootPart")
-			local hum=plr.Character:FindFirstChildOfClass("Humanoid")
-			if tRoot and hum and hum.Health>0 then
-				local dist=(tRoot.Position-root.Position).Magnitude
-				if dist<minDist then minDist=dist;closest=tRoot;closestPlr=plr end
-			end
-		end
-	end
-	return closest,closestPlr,minDist
+local function ensureBatEquipped()
+    local char=getCharacter()
+    local hum=getHumanoid()
+    if not char or not hum then return end
+    if not char:FindFirstChildOfClass("Tool") then
+        local bat=findBat()
+        if bat then pcall(function() hum:EquipTool(bat) end);batTool=bat end
+    else
+        batTool=char:FindFirstChildOfClass("Tool")
+    end
 end
 
--- Get target with stickiness: prefer existing target unless new one is 30% closer
-local function getStickyTarget(currentRoot)
-	local root=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-	if not root then return nil,nil end
-	local newClosest,newPlr,newDist=getClosestTarget()
-	if not newClosest then return nil,nil end
-	if currentRoot and currentRoot.Parent then
-		local currentPlr=Players:GetPlayerFromCharacter(currentRoot.Parent)
-		local hum=currentRoot.Parent:FindFirstChildOfClass("Humanoid")
-		if currentPlr and hum and hum.Health>0 then
-			local currentDist=(currentRoot.Position-root.Position).Magnitude
-			-- Keep current if new isn't significantly closer (30%) or new is same player
-			if currentPlr==newPlr or newDist>currentDist*0.7 then
-				return currentRoot,currentPlr
-			end
-		end
-	end
-	return newClosest,newPlr
-end
-
-local function swingCurrentBat(char)
-	if not autoSwingEnabled then return end
-	local bat=findBat()
-	if bat and bat.Parent==char and bat:IsA("Tool") then
-		pcall(function() bat:Activate() end)
-	end
+resetAutoBatMotion=function()
+    local root=getRootPart()
+    local hum=getHumanoid()
+    if root then
+        root.AssemblyLinearVelocity=root.AssemblyLinearVelocity*0.3
+        root.AssemblyAngularVelocity=Vector3.zero
+    end
+    if hum then hum.AutoRotate=true end
 end
 
 startBatAimbot=function()
-    if aimbotConn then aimbotConn:Disconnect(); aimbotConn=nil end
-    if autoLeftEnabled then
-        autoLeftEnabled=false
-        if autoLeftSetVisual then autoLeftSetVisual(false) end
-        stopAutoLeft()
-    end
-    if autoRightEnabled then
-        autoRightEnabled=false
-        if autoRightSetVisual then autoRightSetVisual(false) end
-        stopAutoRight()
-    end
+    if autoBatConnection then autoBatConnection:Disconnect();autoBatConnection=nil end
+    if autoLeftEnabled then autoLeftEnabled=false;if autoLeftSetVisual then autoLeftSetVisual(false) end;stopAutoLeft() end
+    if autoRightEnabled then autoRightEnabled=false;if autoRightSetVisual then autoRightSetVisual(false) end;stopAutoRight() end
 
+    AUTO_BAT_ENABLED=true
     autoBatEnabled=true
     State.AutoBat=true
     State.BatAimbot=true
+    autoBatEquipped=false
     if refreshBatMotionAntiDieGuard then refreshBatMotionAntiDieGuard() end
 
-    local hum0=LP.Character and LP.Character:FindFirstChildOfClass("Humanoid")
-    if hum0 then hum0.AutoRotate=false end
-
-    -- Cursed Hub-style AUTO BAT backend.
-    local AUTO_BAT_SPEED=58
-    local AUTO_BAT_VERT_SPEED=52
-    local AUTO_BAT_DIST=-2.8
-    local AUTO_BAT_HEIGHT=4.75
-    local AUTO_BAT_V_OFF=1
-    local AUTO_BAT_TURN_SPEED=285
-    local AUTO_BAT_MAX_TURN_RATE=28
-    local AUTO_SWING_ENABLED=true
-
-    aimbotConn=RunService.Heartbeat:Connect(function()
-        if not autoBatEnabled then return end
-
-        local char=LP.Character
-        local hum=char and char:FindFirstChildOfClass("Humanoid")
-        local root=char and char:FindFirstChild("HumanoidRootPart")
+    autoBatConnection=RunService.Heartbeat:Connect(function()
+        if not AUTO_BAT_ENABLED or not autoBatEnabled then return end
+        local char=getCharacter()
+        local hum=getHumanoid()
+        local root=getRootPart()
         if not char or not hum or not root then return end
 
-        local bat=findBat()
-        if bat and bat.Parent~=char then
-            pcall(function() hum:EquipTool(bat) end)
+        if not autoBatEquipped then
+            autoBatEquipped=true
+            ensureBatEquipped()
         end
 
-        local target,targetPlr=getStickyTarget(_aimbotTarget)
-        if not target then
-            _aimbotTarget=nil
-            _aimbotTargetPlr=nil
+        local target=getAutoBatTarget()
+        if target then
+            local targetVel=target.AssemblyLinearVelocity
+            local aimTargetPos=target.Position+(targetVel*math.clamp(targetVel.Magnitude/130,0.05,0.15))+Vector3.new(0,AUTO_BAT_V_OFF,0)
+            hum.AutoRotate=false
+
+            local look=aimTargetPos-root.Position
+            local flatLook=Vector3.new(look.X,0,look.Z)
+            if look.Magnitude>0.01 and flatLook.Magnitude>0.01 then
+                local targetYaw=math.deg(math.atan2(-flatLook.X,-flatLook.Z))
+                local yawDelta=(targetYaw-root.Orientation.Y+180)%360-180
+                local targetPitch=math.deg(math.atan2(look.Y,flatLook.Magnitude))
+                local pitchDelta=(targetPitch-root.Orientation.X+180)%360-180
+                local yawRate=math.clamp(math.rad(yawDelta)*AUTO_BAT_TURN_SPEED,-AUTO_BAT_MAX_TURN_RATE,AUTO_BAT_MAX_TURN_RATE)
+                local pitchRate=math.clamp(math.rad(pitchDelta)*AUTO_BAT_TURN_SPEED,-AUTO_BAT_MAX_TURN_RATE,AUTO_BAT_MAX_TURN_RATE)
+                local yawRad=math.rad(root.Orientation.Y)
+                local rightAxis=Vector3.new(math.cos(yawRad),0,-math.sin(yawRad))
+                root.AssemblyAngularVelocity=Vector3.new(0,yawRate,0)+(rightAxis*pitchRate)
+            else
+                root.AssemblyAngularVelocity=Vector3.zero
+            end
+
+            local dir=look.Magnitude>0.01 and look.Unit or Vector3.zero
+            local standPos=aimTargetPos-(dir*AUTO_BAT_DIST)+Vector3.new(0,AUTO_BAT_HEIGHT,0)
+            local moveDir=standPos-root.Position
+            local hDir=Vector3.new(moveDir.X,0,moveDir.Z)
+            local hVel=hDir.Magnitude>0.1 and hDir.Unit*AUTO_BAT_SPEED or Vector3.zero
+            local vVel=math.abs(moveDir.Y)>0.1 and Vector3.new(0,math.sign(moveDir.Y)*AUTO_BAT_VERT_SPEED,0) or Vector3.new(0,-2,0)
+            root.AssemblyLinearVelocity=hVel+vVel
+            if hDir.Magnitude>0.5 then hum:Move(hDir.Unit,false) end
+
+            if AUTO_SWING_ENABLED and (root.Position-target.Position).Magnitude<6 then
+                local bat=findBat() or batTool
+                if bat and bat:IsA("Tool") then pcall(function() bat:Activate() end) end
+            end
+        else
             hum.AutoRotate=true
             root.AssemblyAngularVelocity=Vector3.zero
             root.AssemblyLinearVelocity=Vector3.zero
-            return
-        end
-
-        _aimbotTarget=target
-        _aimbotTargetPlr=targetPlr
-
-        local targetVel=target.AssemblyLinearVelocity
-        local aimTargetPos=target.Position
-            + (targetVel * math.clamp(targetVel.Magnitude/130,0.05,0.15))
-            + Vector3.new(0,AUTO_BAT_V_OFF,0)
-
-        hum.AutoRotate=false
-
-        local look=aimTargetPos-root.Position
-        local flatLook=Vector3.new(look.X,0,look.Z)
-
-        if look.Magnitude>0.01 and flatLook.Magnitude>0.01 then
-            local targetYaw=math.deg(math.atan2(-flatLook.X,-flatLook.Z))
-            local yawDelta=(targetYaw-root.Orientation.Y+180)%360-180
-            local targetPitch=math.deg(math.atan2(look.Y,flatLook.Magnitude))
-            local pitchDelta=(targetPitch-root.Orientation.X+180)%360-180
-
-            local yawRate=math.clamp(
-                math.rad(yawDelta)*AUTO_BAT_TURN_SPEED,
-                -AUTO_BAT_MAX_TURN_RATE,
-                AUTO_BAT_MAX_TURN_RATE
-            )
-            local pitchRate=math.clamp(
-                math.rad(pitchDelta)*AUTO_BAT_TURN_SPEED,
-                -AUTO_BAT_MAX_TURN_RATE,
-                AUTO_BAT_MAX_TURN_RATE
-            )
-
-            local yawRad=math.rad(root.Orientation.Y)
-            local rightAxis=Vector3.new(math.cos(yawRad),0,-math.sin(yawRad))
-            root.AssemblyAngularVelocity=Vector3.new(0,yawRate,0)+(rightAxis*pitchRate)
-        else
-            root.AssemblyAngularVelocity=Vector3.zero
-        end
-
-        local dir=look.Magnitude>0.01 and look.Unit or Vector3.zero
-        local standPos=aimTargetPos-(dir*AUTO_BAT_DIST)+Vector3.new(0,AUTO_BAT_HEIGHT,0)
-        local moveDir=standPos-root.Position
-        local hDir=Vector3.new(moveDir.X,0,moveDir.Z)
-
-        local hVel=hDir.Magnitude>0.1 and hDir.Unit*AUTO_BAT_SPEED or Vector3.zero
-        local vVel=math.abs(moveDir.Y)>0.1
-            and Vector3.new(0,math.sign(moveDir.Y)*AUTO_BAT_VERT_SPEED,0)
-            or Vector3.new(0,-2,0)
-
-        root.AssemblyLinearVelocity=hVel+vVel
-
-        if hDir.Magnitude>0.5 then
-            hum:Move(hDir.Unit,false)
-        end
-
-        if AUTO_SWING_ENABLED and (root.Position-target.Position).Magnitude<6 then
-            local swingBat=findBat()
-            if swingBat and swingBat:IsA("Tool") then
-                pcall(function() swingBat:Activate() end)
-            end
         end
     end)
 end
 
 stopBatAimbot=function()
-    if aimbotConn then aimbotConn:Disconnect();aimbotConn=nil end
-    _aimbotTarget=nil
-    _aimbotTargetPlr=nil
+    AUTO_BAT_ENABLED=false
     autoBatEnabled=false
+    if autoBatConnection then autoBatConnection:Disconnect();autoBatConnection=nil end
+    _autoBatTarget=nil
+    _autoBatLastScan=0
+    batTool=nil
+    autoBatEquipped=false
     State.AutoBat=false
     State.BatAimbot=false
-
-    local char=LP.Character
-    local root=char and char:FindFirstChild("HumanoidRootPart")
-    if root then
-        root.AssemblyLinearVelocity=Vector3.zero
-        root.AssemblyAngularVelocity=Vector3.zero
-    end
-
-    local hum2=char and char:FindFirstChildOfClass("Humanoid")
-    if hum2 then hum2.AutoRotate=true end
-
     State.hittingCooldown=false
-    if resetAutoBatMotion then resetAutoBatMotion() end
+    resetAutoBatMotion()
     if refreshBatMotionAntiDieGuard then refreshBatMotionAntiDieGuard() end
 end
 
 local function queueAutoLeftStart()
     autoLeftEnabled=true
-    if autoRightEnabled then
-        autoRightEnabled=false
-        if autoRightSetVisual then autoRightSetVisual(false) end
-        stopAutoRight()
-    end
-    if autoBatEnabled then
-        stopBatAimbot()
-        if autoBatSetVisual then autoBatSetVisual(false) end
-    end
+    if autoRightEnabled then autoRightEnabled=false;if autoRightSetVisual then autoRightSetVisual(false) end;stopAutoRight() end
+    if autoBatEnabled then stopBatAimbot();if autoBatSetVisual then autoBatSetVisual(false) end end
     startAutoLeft()
 end
 
 local function queueAutoRightStart()
     autoRightEnabled=true
-    if autoLeftEnabled then
-        autoLeftEnabled=false
-        if autoLeftSetVisual then autoLeftSetVisual(false) end
-        stopAutoLeft()
-    end
-    if autoBatEnabled then
-        stopBatAimbot()
-        if autoBatSetVisual then autoBatSetVisual(false) end
-    end
+    if autoLeftEnabled then autoLeftEnabled=false;if autoLeftSetVisual then autoLeftSetVisual(false) end;stopAutoLeft() end
+    if autoBatEnabled then stopBatAimbot();if autoBatSetVisual then autoBatSetVisual(false) end end
     startAutoRight()
 end
 
@@ -1250,26 +1105,19 @@ local hittingCooldownDesync=false
 local function getBatDesync()
     local char=LP.Character
     if not char then return nil end
-
     local tool=char:FindFirstChild("Bat")
     if tool then return tool end
-
     local bp=LP:FindFirstChild("Backpack")
     if bp then
         tool=bp:FindFirstChild("Bat")
-        if tool then
-            tool.Parent=char
-            return tool
-        end
+        if tool then tool.Parent=char;return tool end
     end
-
     return nil
 end
 
 local function tryHitBatDesync()
     if hittingCooldownDesync then return end
     hittingCooldownDesync=true
-
     pcall(function()
         local bat=getBatDesync()
         if bat then
@@ -1278,19 +1126,14 @@ local function tryHitBatDesync()
             if ev then ev:FireServer() end
         end
     end)
-
-    task.delay(0.05,function()
-        hittingCooldownDesync=false
-    end)
+    task.delay(0.05,function() hittingCooldownDesync=false end)
 end
 
 local function getClosestPlayerDesync()
     local char=LP.Character
     if not char then return nil,math.huge end
-
     local hrp=char:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil,math.huge end
-
     local closest,closestDist=nil,math.huge
     for _,p in ipairs(Players:GetPlayers()) do
         if p~=LP and p.Character then
@@ -1298,53 +1141,35 @@ local function getClosestPlayerDesync()
             local hum=p.Character:FindFirstChildOfClass("Humanoid")
             if tr and hum and hum.Health>0 then
                 local d=(hrp.Position-tr.Position).Magnitude
-                if d<closestDist then
-                    closestDist=d
-                    closest=p
-                end
+                if d<closestDist then closestDist=d;closest=p end
             end
         end
     end
-
     return closest,closestDist
 end
 
 local function batDesyncTpUpdate()
     if not batDesyncTpEnabled then return end
-
     local char=LP.Character
     if not char then return end
-
     local hrp=char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
-
     local target,dist=getClosestPlayerDesync()
     if not target or not target.Character then return end
-
     local tr=target.Character:FindFirstChild("HumanoidRootPart")
     local th=target.Character:FindFirstChildOfClass("Humanoid")
     if not tr or not th or th.Health<=0 then return end
 
     if sethiddenproperty then
-        pcall(function()
-            sethiddenproperty(hrp,"PhysicsRepRootPart",tr)
-        end)
-        pcall(function()
-            sethiddenproperty(hrp,"NetworkOwnership",9999)
-        end)
+        pcall(function() sethiddenproperty(hrp,"PhysicsRepRootPart",tr) end)
+        pcall(function() sethiddenproperty(hrp,"NetworkOwnership",9999) end)
     end
 
-    -- Stay within 8 studs, matching the requested TP-Bat behavior.
     local targetPos=tr.Position+Vector3.new(0,0.9,0)
-    if dist>8 then
-        hrp.CFrame=CFrame.new(targetPos)
-    end
+    if dist>8 then hrp.CFrame=CFrame.new(targetPos) end
 
     local cam=workspace.CurrentCamera
-    if cam then
-        cam.CFrame=CFrame.new(cam.CFrame.Position,tr.Position+Vector3.new(0,0.5,0))
-    end
-
+    if cam then cam.CFrame=CFrame.new(cam.CFrame.Position,tr.Position+Vector3.new(0,0.5,0)) end
     tryHitBatDesync()
 end
 
@@ -1354,62 +1179,33 @@ function startBatDesyncTp()
         if batDesyncTpSetVisual then batDesyncTpSetVisual(false) end
         return
     end
-
     if batDesyncTpConn then return end
-
     batDesyncTpEnabled=true
     batDesyncTpConn=RunService.Heartbeat:Connect(batDesyncTpUpdate)
 end
 
 function stopBatDesyncTp()
-    if batDesyncTpConn then
-        batDesyncTpConn:Disconnect()
-        batDesyncTpConn=nil
-    end
+    if batDesyncTpConn then batDesyncTpConn:Disconnect();batDesyncTpConn=nil end
     batDesyncTpEnabled=false
     hittingCooldownDesync=false
-
     local char=LP.Character
     local hrp=char and char:FindFirstChild("HumanoidRootPart")
-    if hrp then
-        pcall(function()
-            if sethiddenproperty then
-                sethiddenproperty(hrp,"PhysicsRepRootPart",nil)
-            end
-        end)
-    end
+    if hrp and sethiddenproperty then pcall(function() sethiddenproperty(hrp,"PhysicsRepRootPart",nil) end) end
 end
 
-function queueAutoBatStart()
-    startBatAimbot()
-end
-
-function resetAutoBatMotion()
-    local char=LP.Character
-    if char then
-        local root=char:FindFirstChild("HumanoidRootPart")
-        local hum=char:FindFirstChildOfClass("Humanoid")
-        if root then
-            root.AssemblyLinearVelocity=root.AssemblyLinearVelocity*0.3
-            root.AssemblyAngularVelocity=Vector3.zero
-        end
-        if hum then hum.AutoRotate=true end
-    end
-end
-
+function queueAutoBatStart() startBatAimbot() end
 startAutoSwingLoop=function() end
 stopAutoSwingLoop=function() end
 swingCurrentBat=function() end
 
-LP.CharacterAdded:Connect(function(char)
+LP.CharacterAdded:Connect(function()
+    autoBatEquipped=false
     if autoBatEnabled then
         task.wait(0.5)
-        startBatAimbot()
+        ensureBatEquipped()
     end
 end)
 end)()
-
-
 local isNearPodiumWithPrompt
 
 local function addShimmerToLabel(lbl,color1,color2)
@@ -1828,152 +1624,32 @@ local function setupSpeedIndicator(char)
     -- The speed label is handled by Overhead.
 end
 
--- ==================== SPEED MODE STATE ====================
--- speedMode is the single source of truth. The legacy booleans are mirrors only.
--- GUI edits always change the live numeric variables used by movement.
-local speedMode = "Normal"
-local manualSpeedOverride = false
-local applyActiveHumanoidSpeed
-
-local function setSpeedMode(mode)
-    if mode ~= "Normal" and mode ~= "Carry" and mode ~= "Lagger" and mode ~= "Lagger Carry" then
-        mode = "Normal"
-    end
-
-    -- IMPORTANT: changing the mode must also remove any movement constraint
-    -- left behind by a previous mode.  Otherwise an old LinearVelocity can
-    -- keep forcing the old Carry/Lagger speed even after the toggle is off.
-    speedMode = mode
-    carrySpeedActive = (mode == "Carry" or mode == "Lagger Carry")
-    laggerModeEnabled = (mode == "Lagger" or mode == "Lagger Carry")
-
-    -- Also apply the selected speed directly to the Humanoid. The previous
-    -- fix only cleared movement constraints; if the game resets/holds
-    -- Humanoid.WalkSpeed at its default (often 16), the selected mode could
-    -- still appear stuck at 16.
-    if applyActiveHumanoidSpeed then pcall(applyActiveHumanoidSpeed) end
-
-    pcall(function()
-        local char = LP and LP.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            local oldLV = hrp:FindFirstChild("_RHSpeedLV")
-            if oldLV then oldLV:Destroy() end
-            local v = hrp.AssemblyLinearVelocity
-            -- Preserve vertical velocity, but discard horizontal velocity from
-            -- the previous mode so the next frame starts from the new speed.
-            hrp.AssemblyLinearVelocity = Vector3.new(0, v.Y, 0)
-        end
-    end)
-
-    if refreshSpeedModeLabel then refreshSpeedModeLabel() end
-    if _GACC.safeCarryVisual then pcall(_GACC.safeCarryVisual, carrySpeedActive) end
-    if _GACC.safeLaggerVisual then pcall(_GACC.safeLaggerVisual, laggerModeEnabled) end
-end
-
-local function syncSpeedMode()
-    -- Never let stale legacy booleans overwrite the authoritative mode.
-    -- They are kept synchronized by setSpeedMode().
-    if speedMode ~= "Normal" and speedMode ~= "Carry" and speedMode ~= "Lagger" and speedMode ~= "Lagger Carry" then
-        speedMode = "Normal"
-    end
-    local wantCarry = (speedMode == "Carry" or speedMode == "Lagger Carry")
-    local wantLagger = (speedMode == "Lagger" or speedMode == "Lagger Carry")
-    if carrySpeedActive ~= wantCarry or laggerModeEnabled ~= wantLagger then
-        carrySpeedActive = wantCarry
-        laggerModeEnabled = wantLagger
-    end
-    return speedMode
-end
-
 local function getActiveMoveSpeed()
-    local mode = syncSpeedMode()
-    if mode == "Lagger Carry" then
-        return math.max(0, tonumber(LAGGER_CARRY_SPEED) or 0)
-    elseif mode == "Lagger" then
-        return math.max(0, tonumber(LAGGER_SPEED) or 0)
-    elseif mode == "Carry" then
-        return math.max(0, tonumber(CS) or 0)
-    else
-        return math.max(0, tonumber(NS) or 0)
-    end
-end
-
-local function _validateSpeedState()
-    return syncSpeedMode()
-end
-
-applyActiveHumanoidSpeed = function()
-    local char = LP and LP.Character
-    local hum = char and char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
-    local mode = syncSpeedMode()
-    local speed
-    if mode == "Lagger Carry" then
-        speed = tonumber(LAGGER_CARRY_SPEED) or 15
-    elseif mode == "Lagger" then
-        speed = tonumber(LAGGER_SPEED) or 30
-    elseif mode == "Carry" then
-        speed = tonumber(CS) or 29
-    else
-        speed = tonumber(NS) or 59
-    end
-    if speed >= 0 then hum.WalkSpeed = speed end
+    if laggerModeEnabled then return carrySpeedActive and LAGGER_CARRY_SPEED or LAGGER_SPEED
+    elseif carrySpeedActive then return CS
+    else return NS end
 end
 
 local function getAutoPathSpeed()
-    local mode = syncSpeedMode()
-    if mode == "Lagger Carry" then
-        return math.max(0, tonumber(LAGGER_CARRY_SPEED) or 0)
-    elseif mode == "Lagger" then
-        return math.max(0, tonumber(LAGGER_SPEED) or 0)
-    else
-        return math.max(0, tonumber(NS) or 0)
-    end
+    if laggerModeEnabled then return carrySpeedActive and LAGGER_CARRY_SPEED or LAGGER_SPEED
+    else return NS end
 end
-do
+
+do 
 local _autoSwitchWasSteal=false
-local _autoSwitchSavedMode=nil
-
 local function updateAutoSwitchSpeed()
-    if manualSpeedOverride then return end
-    if not autoSwitchSpeedEnabled then
-        if _autoSwitchWasSteal then
-            setSpeedMode(_autoSwitchSavedMode or "Normal")
-        end
-        _autoSwitchWasSteal=false
-        _autoSwitchSavedMode=nil
-        return
-    end
-
-    local char=LP.Character
-    if not char then return end
-    local h=char:FindFirstChildOfClass("Humanoid")
-    if not h then return end
-
+    if not autoSwitchSpeedEnabled then return end
+    local char=LP.Character;if not char then return end
+    local h=char:FindFirstChildOfClass("Humanoid");if not h then return end
     local isStealSpeed=h.WalkSpeed<25
     if isStealSpeed==_autoSwitchWasSteal then return end
     _autoSwitchWasSteal=isStealSpeed
-
-    if isStealSpeed then
-        if not _autoSwitchSavedMode then _autoSwitchSavedMode=speedMode end
-        setSpeedMode("Carry")
-    else
-        setSpeedMode(_autoSwitchSavedMode or "Normal")
-        _autoSwitchSavedMode=nil
-    end
-
+    if isStealSpeed then carrySpeedActive = true else carrySpeedActive = false end
+    if refreshSpeedModeLabel then refreshSpeedModeLabel() end
     if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
-    if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
 end
-
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-        updateAutoSwitchSpeed()
-    end
-end)
-end
+task.spawn(function() while true do task.wait(0.1);updateAutoSwitchSpeed() end end)
+end 
 
 local function startHoldInfJump()
     if holdInfJumpConn then holdInfJumpConn:Disconnect() end
@@ -2826,198 +2502,87 @@ RunService.Stepped:Connect(function()
 end)
 
 local function _getOrMakeLV(hrp)
-    local lv=hrp:FindFirstChild("_RHSpeedLV")
-    local att=hrp:FindFirstChild("RootAttachment")
-
+    local lv = hrp:FindFirstChild("_RHSpeedLV")
+    local att = hrp:FindFirstChild("RootAttachment")
     if not att then
-        att=Instance.new("Attachment")
-        att.Name="RootAttachment"
-        att.Parent=hrp
+        att = Instance.new("Attachment")
+        att.Name = "RootAttachment"
+        att.Parent = hrp
     end
-
     if not lv then
-        lv=Instance.new("LinearVelocity")
-        lv.Name="_RHSpeedLV"
-        lv.Parent=hrp
+        lv = Instance.new("LinearVelocity")
+        lv.Name = "_RHSpeedLV"
+        lv.Parent = hrp
     end
-
-    lv.Attachment0=att
-    lv.RelativeTo=Enum.ActuatorRelativeTo.World
-    lv.VelocityConstraintMode=Enum.VelocityConstraintMode.Plane
-    lv.PrimaryTangentAxis=Vector3.new(1,0,0)
-    lv.SecondaryTangentAxis=Vector3.new(0,0,1)
-    lv.PlaneVelocity=Vector2.new(0,0)
-    lv.MaxForce=math.huge
-
+    lv.Attachment0 = att
+    lv.RelativeTo = Enum.ActuatorRelativeTo.World
+    lv.VelocityConstraintMode = Enum.VelocityConstraintMode.Plane
+    lv.PrimaryTangentAxis = Vector3.new(1, 0, 0)
+    lv.SecondaryTangentAxis = Vector3.new(0, 0, 1)
+    lv.PlaneVelocity = Vector2.new(0, 0)
+    lv.MaxForce = math.huge
     return lv
 end
-
-local function _speedLVSet(hrp,x,z)
-    local lv=_getOrMakeLV(hrp)
-    lv.PlaneVelocity=Vector2.new(x,z)
+local function _speedLVSet(hrp, x, z)
+    local lv = _getOrMakeLV(hrp)
+    lv.PlaneVelocity = Vector2.new(x, z)
 end
-
 local function _speedLVClear(hrp)
-    local lv=hrp:FindFirstChild("_RHSpeedLV")
+    local lv = hrp:FindFirstChild("_RHSpeedLV")
     if lv then lv:Destroy() end
 end
 
--- ==================== NEW SPEED CONSTRAINT ====================
-local function sampleGround(hrp)
-    if not hrp then return Vector3.new(0,1,0),false end
-
-    local params=RaycastParams.new()
-    params.FilterType=Enum.RaycastFilterType.Exclude
-
-    local char=LP.Character
-    params.FilterDescendantsInstances=char and {char} or {}
-
-    local result=workspace:Raycast(
-        hrp.Position,
-        Vector3.new(0,-6,0),
-        params
-    )
-
-    if result then
-        return result.Normal,true
-    end
-
-    return Vector3.new(0,1,0),false
-end
-
-local function setSpeedConstraint(hrp,horizVel)
-    if not hrp or not horizVel then return end
-
-    local hx,hz=horizVel.X,horizVel.Z
-    local mag=math.sqrt(hx*hx+hz*hz)
-    if mag<0.05 then return end
-
-    local ny,grounded=sampleGround(hrp)
-    local v=hrp.AssemblyLinearVelocity
-    local mass=hrp.AssemblyMass
-
-    local gain=0.85
-    if grounded then
-        if ny<0.55 then
-            gain=0.45
-        elseif ny<0.78 then
-            gain=0.62
-        else
-            gain=0.9
-        end
-    else
-        gain=0.7
-    end
-
-    local target=Vector3.new(hx,v.Y,hz)
-    hrp:ApplyImpulse((target-v)*mass*gain)
-end
-
-local function applyCFrameMove(part,dirUnit,spd,dt)
-    if not part or not dirUnit or dirUnit.Magnitude<0.01 then return end
-
-    local flat=Vector3.new(dirUnit.X,0,dirUnit.Z)
-    if flat.Magnitude<0.01 then return end
-
-    setSpeedConstraint(
-        part,
-        flat.Unit*spd
-    )
-end
-
--- Keep the selected speed applied. This is deliberately small and only
--- writes WalkSpeed; it does not alter the selected mode or toggle state.
+-- ==================== ANTI-FLING CLAMP ====================
+-- Walking into a wall while the speed constraint is running at MaxForce=huge
+-- makes the solver pile up an impulse it cannot resolve; when the contact
+-- finally breaks, that energy launches you.
+--
+-- This runs on Heartbeat, AFTER physics has solved, and simply caps what came
+-- back out. Nothing about the speed system is touched, and there is no
+-- raycasting, so movement can never be blocked. Normal walking is always at
+-- your set speed, well under the trigger, so this sits idle until a real
+-- fling happens.
 RunService.Heartbeat:Connect(function()
-    pcall(function() applyActiveHumanoidSpeed() end)
-end)
-
--- ==================== ANTI-FLING ====================
--- Normal movement remains untouched. Only unusually large horizontal/
--- vertical velocities are clamped, while ragdoll/intentional root-driving
--- modes are allowed to operate normally.
-RunService.Heartbeat:Connect(function()
-    if _GACC.antiFlingEnabled==false then return end
-    if autoBatEnabled or autoLeftEnabled or autoRightEnabled or batDesyncTpEnabled then
-        return
-    end
-
-    local char=LP.Character
-    if not char then return end
-
-    local hum=char:FindFirstChildOfClass("Humanoid")
-    local hrp=char:FindFirstChild("HumanoidRootPart")
-    if not hum or not hrp then return end
-    if isRagdollState(hum) then return end
+    -- these drive the root hard on purpose and legitimately exceed walk speed
+    if autoBatEnabled or autoLeftEnabled or autoRightEnabled or batDesyncTpEnabled then return end
+    local char=LP.Character;if not char then return end
+    local hum=char:FindFirstChildOfClass("Humanoid");if not hum then return end
+    if isRagdollState(hum) then return end   -- ragdolls are supposed to tumble
+    local hrp=char:FindFirstChild("HumanoidRootPart");if not hrp then return end
 
     local cap=getActiveMoveSpeed()
     local v=hrp.AssemblyLinearVelocity
     local flat=Vector3.new(v.X,0,v.Z)
     local m=flat.Magnitude
-
     local newY=v.Y
-    if newY>95 then
-        newY=95
-    elseif newY<-150 then
-        newY=-150
-    end
-
-    if m>math.max(cap*1.6,90) and m>0.01 then
+    -- a fling throws you upward far harder than any jump (inf jump uses 55)
+    if newY>95 then newY=95 end
+    if m>cap*1.6 and m>0.01 then
         local u=flat/m
-        hrp.AssemblyLinearVelocity=Vector3.new(
-            u.X*cap,
-            newY,
-            u.Z*cap
-        )
+        hrp.AssemblyLinearVelocity=Vector3.new(u.X*cap,newY,u.Z*cap)
     elseif newY~=v.Y then
         hrp.AssemblyLinearVelocity=Vector3.new(v.X,newY,v.Z)
     end
 end)
 
 RunService.RenderStepped:Connect(function()
-    local char=LP.Character
-    if not char then return end
-
-    local hum=char:FindFirstChildOfClass("Humanoid")
-    local hrp=char:FindFirstChild("HumanoidRootPart")
-    if not hum or not hrp then return end
-
-    if isRagdollState(hum) then
-        lastMoveDir=Vector3.zero
-        _speedLVClear(hrp)
-        return
-    end
-
+    local char=LP.Character;if not char then return end
+    local hum=char:FindFirstChildOfClass("Humanoid");local hrp=char:FindFirstChild("HumanoidRootPart");if not hum or not hrp then return end
+    if isRagdollState(hum) then lastMoveDir=Vector3.new(0,0,0);_speedLVClear(hrp);return end
     if not autoBatEnabled and not autoLeftEnabled and not autoRightEnabled then
-        local md=hum.MoveDirection
-        local _mode=_validateSpeedState()
-        local spd=getActiveMoveSpeed()
-
+        local md=hum.MoveDirection;local spd=getActiveMoveSpeed()
         if md.Magnitude>0 then
             lastMoveDir=md
-            -- The main movement path uses impulse-based speed control.  Never
-            -- leave an old LinearVelocity from Carry/Lagger/auto-path movement
-            -- alive while this path is active.
-            _speedLVClear(hrp)
-            applyCFrameMove(hrp,md,spd,1/60)
+            _speedLVSet(hrp, md.X*spd, md.Z*spd)
         elseif antiRagdollEnabled and lastMoveDir.Magnitude>0 then
-            _speedLVClear(hrp)
-            local anyHeld=false
-            for key in pairs(MOVE_KEYS) do
-                if UIS:IsKeyDown(key) then
-                    anyHeld=true
-                    break
-                end
-            end
-
-            if anyHeld then
-                applyCFrameMove(hrp,lastMoveDir,spd,1/60)
-            else
-                _speedLVClear(hrp)
-            end
+            local anyHeld=false;for key in pairs(MOVE_KEYS) do if UIS:IsKeyDown(key) then anyHeld=true;break end end
+            if anyHeld then _speedLVSet(hrp, lastMoveDir.X*spd, lastMoveDir.Z*spd)
+            else _speedLVClear(hrp) end
         else
             _speedLVClear(hrp)
         end
     end
+    -- speed label is now handled by Overhead system; we don't use speedLabel variable anymore.
 end)
 
 do 
@@ -3427,19 +2992,18 @@ end
     local state={applied=false,waiting=false,watchUntil=0,graceUntil=0,savedMode=nil,stealWasActive=false}
 
     local function modeName()
-        return speedMode
+        if laggerModeEnabled then return carrySpeedActive and "Lagger Carry" or "Lagger" end
+        return carrySpeedActive and "Carry" or "Normal"
     end
 
     local function setModes(lagger,carry)
-        if lagger then
-            setSpeedMode(carry and "Lagger Carry" or "Lagger")
-        else
-            setSpeedMode(carry and "Carry" or "Normal")
-        end
-        if _GACC.safeLaggerVisual then _GACC.safeLaggerVisual(laggerModeEnabled) end
-        if _GACC.safeCarryVisual then _GACC.safeCarryVisual(carrySpeedActive) end
-        if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
-        if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
+        laggerModeEnabled=lagger
+        carrySpeedActive=carry
+        if refreshSpeedModeLabel then refreshSpeedModeLabel() end
+        if _GACC.safeLaggerVisual then _GACC.safeLaggerVisual(lagger) end
+        if _GACC.safeCarryVisual then _GACC.safeCarryVisual(carry) end
+        if mobBtnRefs.lagger then mobBtnRefs.lagger(lagger) end
+        if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carry) end
     end
 
     local function isIgnoredTool(name)
@@ -3466,32 +3030,18 @@ end
         state.waiting=false;state.watchUntil=0
         if not state.applied then state.savedMode=modeName() end
         state.applied=true;state.graceUntil=tick()+.75
-        local wasLagger=state.savedMode=="Lagger" or state.savedMode=="Lagger Carry"
+        local wasLagger=state.savedMode=="Lagger" or state.savedMode=="Lagger Carry" or laggerModeEnabled
         if wasLagger then setModes(true,true) else setModes(false,true) end
     end
 
     local function disableCarry()
-        local wasApplied=state.applied
-        local saved=state.savedMode
-        state.applied=false
-        state.waiting=false
-        state.watchUntil=0
-        state.graceUntil=0
-        state.savedMode=nil
-
-        if wasApplied then
-            if saved=="Lagger" or saved=="Lagger Carry" then
-                setModes(true,false)
-            elseif saved=="Carry" then
-                setModes(false,true)
-            else
-                setModes(false,false)
-            end
-        elseif not _GACC.autoCarrySpeedEnabled then
-            -- If the feature was disabled while another callback was changing
-            -- state, force the authoritative mode back to its current mirror.
-            syncSpeedMode()
-        end
+        if not state.applied and not state.waiting then return end
+        local wasApplied=state.applied;local saved=state.savedMode
+        state.applied=false;state.waiting=false;state.watchUntil=0;state.graceUntil=0;state.savedMode=nil
+        if not wasApplied then return end
+        if saved=="Lagger" or saved=="Lagger Carry" then setModes(true,false)
+        elseif saved=="Carry" then setModes(false,true)
+        else setModes(false,false) end
     end
 
     _GACC.autoCarryWatch=function(seconds)
@@ -3501,10 +3051,6 @@ end
     _GACC.disableAutoCarry=disableCarry
 
     RunService.RenderStepped:Connect(function()
-        if manualSpeedOverride then
-            if state.applied then disableCarry() end
-            return
-        end
         if not _GACC.autoCarrySpeedEnabled then disableCarry();return end
         local char=LP.Character;local hum=char and char:FindFirstChildOfClass("Humanoid");local root=char and char:FindFirstChild("HumanoidRootPart")
         if not char or not hum or not root then disableCarry();state.stealWasActive=false;return end
@@ -3529,7 +3075,7 @@ saveConfig=function()
         elseif e.gp then return {gp=e.gp.Name}
         else return {kb=nil,gp=nil} end
     end
-    local cfg={speedMode=speedMode,normalSpeed=NS,carrySpeed=CS,dropBrainrotKey=ks(KB.DropBrainrot),autoLeftKey=ks(KB.AutoLeft),autoRightKey=ks(KB.AutoRight),autoBatKey=ks(KB.AutoBat),laggerToggleKey=ks(KB.LaggerToggle),tpFloorKey=ks(KB.TPFloor),guiHideKey=ks(KB.GuiHide),speedToggleKey=ks(KB.SpeedToggle),grabRadius=Steal.StealRadius,stealDuration=Steal.StealDuration,stealMode=stealMode,antiRagdoll=antiRagdollEnabled,autoStealEnabled=Steal.AutoStealEnabled,infiniteJump=infJumpEnabled,infJumpMode=infJumpMode,medusaCounter=medusaCounterEnabled,carrySpeedActive=carrySpeedActive,laggerModeEnabled=laggerModeEnabled,laggerSpeed=LAGGER_SPEED,laggerCarrySpeed=LAGGER_CARRY_SPEED,autoBat=autoBatEnabled,autoSwing=autoSwingEnabled,unwalkEnabled=unwalkEnabled,antiLag=antiLagEnabled,stretchRez=stretchRezEnabled,autoTPEnabled=autoTPEnabled,autoTPHeight=autoTPHeight,guiTransparencyEnabled=guiTransparencyEnabled,mobileButtonsEnabled=mobileButtonsEnabled,mobileButtonsLocked=mobileButtonsLocked,mobileButtonsSize=mobileButtonsSize,circleButtonsEnabled=circleButtonsEnabled,autoSwitchSpeed=autoSwitchSpeedEnabled,fovValue=fovValue,perButtonDrag=perButtonDragEnabled,skyTheme=currentSkyTheme,medusaReset=medusaResetEnabled,autoMoveSwing=autoMoveSwingEnabled,autoMoveSwingInterval=autoMoveSwingInterval,ragdollGui=ragdollGuiEnabled,introSoundEnabled=introSoundEnabled,animEnabled=false,animationPack=_GACC.extras.getPack(),headlessEnabled=_GACC.extras.getHeadless(),korbloxEnabled=_GACC.extras.getKorblox(),backgroundEnabled=backgroundEnabled,backgroundIndex=backgroundIndex,colorThemeName=currentColorTheme,keys=(function() if not _GuiKeys then return {} end;local t={};for k,v in pairs(_GuiKeys) do t[k]=v.Name end;return t end)()}
+    local cfg={normalSpeed=NS,carrySpeed=CS,dropBrainrotKey=ks(KB.DropBrainrot),autoLeftKey=ks(KB.AutoLeft),autoRightKey=ks(KB.AutoRight),autoBatKey=ks(KB.AutoBat),laggerToggleKey=ks(KB.LaggerToggle),tpFloorKey=ks(KB.TPFloor),guiHideKey=ks(KB.GuiHide),speedToggleKey=ks(KB.SpeedToggle),grabRadius=Steal.StealRadius,stealDuration=Steal.StealDuration,stealMode=stealMode,antiRagdoll=antiRagdollEnabled,autoStealEnabled=Steal.AutoStealEnabled,infiniteJump=infJumpEnabled,infJumpMode=infJumpMode,medusaCounter=medusaCounterEnabled,carrySpeedActive=carrySpeedActive,laggerModeEnabled=laggerModeEnabled,laggerSpeed=LAGGER_SPEED,laggerCarrySpeed=LAGGER_CARRY_SPEED,autoBat=autoBatEnabled,autoSwing=autoSwingEnabled,unwalkEnabled=unwalkEnabled,antiLag=antiLagEnabled,stretchRez=stretchRezEnabled,autoTPEnabled=autoTPEnabled,autoTPHeight=autoTPHeight,guiTransparencyEnabled=guiTransparencyEnabled,mobileButtonsEnabled=mobileButtonsEnabled,mobileButtonsLocked=mobileButtonsLocked,mobileButtonsSize=mobileButtonsSize,circleButtonsEnabled=circleButtonsEnabled,autoSwitchSpeed=autoSwitchSpeedEnabled,fovValue=fovValue,perButtonDrag=perButtonDragEnabled,skyTheme=currentSkyTheme,medusaReset=medusaResetEnabled,autoMoveSwing=autoMoveSwingEnabled,autoMoveSwingInterval=autoMoveSwingInterval,ragdollGui=ragdollGuiEnabled,introSoundEnabled=introSoundEnabled,animEnabled=false,animationPack=_GACC.extras.getPack(),headlessEnabled=_GACC.extras.getHeadless(),korbloxEnabled=_GACC.extras.getKorblox(),backgroundEnabled=backgroundEnabled,backgroundIndex=backgroundIndex,colorThemeName=currentColorTheme,keys=(function() if not _GuiKeys then return {} end;local t={};for k,v in pairs(_GuiKeys) do t[k]=v.Name end;return t end)()}
     cfg.playerHighlightEnabled=_GACC.playerHighlightEnabled
     cfg.autoCarrySpeedEnabled=_GACC.autoCarrySpeedEnabled
     cfg.opRadius=SemiSteal.CONFIG.RADIUS
@@ -3539,7 +3085,8 @@ saveConfig=function()
     cfg.opStopTimeEnabled=SemiSteal.CONFIG.STOP_TIME_ENABLED
     cfg.medusaResetEnabled=_GACC.medusaResetEnabled
     cfg.antiSummerBaseEnabled=AntiSummer.antiSummerBaseEnabled
-    cfg.antiDieEnabled = antiDieEnabled  -- NEW
+    cfg.antiDieEnabled = antiDieEnabled
+    cfg.antiFlingEnabled = antiFlingEnabled
     -- NEW SCALES
     cfg.menuScale = menuScale
     cfg.mobileBtnScale = mobileBtnScale
@@ -3558,13 +3105,8 @@ end
 task.spawn(function() while task.wait(5) do saveConfig() end end)
 
 local function resetAllSettings()
-    NS=59;CS=29;LAGGER_SPEED=30;LAGGER_CARRY_SPEED=15
-    autoSwitchSpeedEnabled=false
-    manualSpeedOverride=false
-    _GACC.autoCarrySpeedEnabled=false
-    if _GACC.disableAutoCarry then pcall(_GACC.disableAutoCarry) end
-    setSpeedMode("Normal")
-    antiRagdollEnabled=false;infJumpEnabled=false;infJumpMode="manual"
+    NS=59;CS=29;LAGGER_SPEED=30;LAGGER_CARRY_SPEED=15;carrySpeedActive=false;laggerModeEnabled=false
+    autoSwitchSpeedEnabled=false;antiRagdollEnabled=false;infJumpEnabled=false;infJumpMode="manual"
     medusaCounterEnabled=false;unwalkEnabled=false
     autoLeftEnabled=false;autoRightEnabled=false;autoBatEnabled=false;autoSwingEnabled=true;autoMoveSwingEnabled=false
     autoTPEnabled=false;autoTPHeight=20;antiLagEnabled=false;stretchRezEnabled=false
@@ -3618,49 +3160,15 @@ refreshSpeedModeLabel=function()
 end
 
 toggleCarryMode=function()
-    -- Manual toggle always wins over automatic carry/speed switching.
-    manualSpeedOverride = true
-    local mode = syncSpeedMode()
-    if mode == "Carry" then
-        setSpeedMode("Normal")
-    else
-        setSpeedMode("Carry")
-    end
-    local char=LP.Character
-    local root=char and char:FindFirstChild("HumanoidRootPart")
-    if root then
-        pcall(function()
-            local lv=root:FindFirstChild("_RHSpeedLV")
-            if lv then lv:Destroy() end
-            local v=root.AssemblyLinearVelocity
-            root.AssemblyLinearVelocity=Vector3.new(0,v.Y,0)
-        end)
-    end
-    if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
-    if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
+    if laggerModeEnabled then laggerModeEnabled = false; carrySpeedActive = true
+    else carrySpeedActive = not carrySpeedActive end
+    refreshSpeedModeLabel()
 end
 
 toggleLaggerMode=function()
-    -- Manual toggle always wins over automatic carry/speed switching.
-    manualSpeedOverride = true
-    local mode = syncSpeedMode()
-    if mode == "Lagger" then
-        setSpeedMode("Normal")
-    else
-        setSpeedMode("Lagger")
-    end
-    local char=LP.Character
-    local root=char and char:FindFirstChild("HumanoidRootPart")
-    if root then
-        pcall(function()
-            local lv=root:FindFirstChild("_RHSpeedLV")
-            if lv then lv:Destroy() end
-            local v=root.AssemblyLinearVelocity
-            root.AssemblyLinearVelocity=Vector3.new(0,v.Y,0)
-        end)
-    end
-    if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
-    if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
+    if not laggerModeEnabled then laggerModeEnabled = true; carrySpeedActive = false
+    else carrySpeedActive = not carrySpeedActive end
+    refreshSpeedModeLabel()
 end
 
 ;(function()
@@ -3738,134 +3246,72 @@ end
 
 stopUnwalk=function() local c=LP.Character;if c and unwalkSavedAnimate then unwalkSavedAnimate:Clone().Parent=c;unwalkSavedAnimate=nil end end
 
--- ========== ANTI DIE ==========
--- Local protection backend. It restores health while enabled and temporarily
--- yields during Instant Reset so the reset system can still function.
-local function protectChar(char)
-    if not char then return end
-
-    local hum=char:FindFirstChildOfClass("Humanoid")
-        or char:WaitForChild("Humanoid",5)
-    if not hum then return end
-
-    pcall(function()
-        hum:SetStateEnabled(Enum.HumanoidStateType.Dead,false)
-    end)
-
-    local sc=hum.StateChanged:Connect(function(_,new)
-        if not antiDieEnabled or resetting then return end
-
-        if new==Enum.HumanoidStateType.Dead then
-            pcall(function()
-                hum:SetStateEnabled(Enum.HumanoidStateType.Dead,false)
-                hum.Health=hum.MaxHealth
-            end)
-        end
-    end)
-    table.insert(antiDieConnections,sc)
-
-    local hc=hum:GetPropertyChangedSignal("Health"):Connect(function()
-        if not antiDieEnabled or resetting then return end
-
-        if hum.Health<hum.MaxHealth then
-            pcall(function()
-                hum.Health=hum.MaxHealth
-            end)
-        end
-    end)
-    table.insert(antiDieConnections,hc)
-
-    if antiDieHeartbeat then
-        antiDieHeartbeat:Disconnect()
-    end
-
-    antiDieHeartbeat=RunService.Heartbeat:Connect(function()
-        if not antiDieEnabled or resetting then return end
-
-        if hum and hum.Parent and hum.Health<hum.MaxHealth then
-            pcall(function()
-                hum.Health=hum.MaxHealth
-            end)
-        end
-    end)
-end
-
-_GACC.applyAntiDie=protectChar
+-- ========== ANTI DIE + ANTI FLING ==========
 
 local function startAntiDie()
-    if antiDieEnabled then return end
-
+    if dieConn then return end
     antiDieEnabled=true
-
-    for _,c in ipairs(antiDieConnections) do
-        pcall(function() c:Disconnect() end)
-    end
-    antiDieConnections={}
-
-    if antiDieHeartbeat then
-        antiDieHeartbeat:Disconnect()
-        antiDieHeartbeat=nil
-    end
-
-    protectChar(LP.Character)
-
-    -- One persistent respawn watcher, rather than creating duplicate
-    -- CharacterAdded connections every time the toggle is pressed.
-    if not _GACC.antiDieCharacterConn then
-        _GACC.antiDieCharacterConn=LP.CharacterAdded:Connect(function(c)
-            if not antiDieEnabled then return end
-            task.wait(0.1)
-
-            for _,c2 in ipairs(antiDieConnections) do
-                pcall(function() c2:Disconnect() end)
-            end
-            antiDieConnections={}
-
-            protectChar(c)
-        end)
-    end
-
-    pcall(function()
-        StarterGui:SetCore("ResetButtonCallback",false)
+    dieConn=RunService.Heartbeat:Connect(function()
+        if not antiDieEnabled then return end
+        local char=LP.Character
+        if not char then return end
+        local hum=char:FindFirstChildOfClass("Humanoid")
+        if hum and hum.Health<hum.MaxHealth then
+            pcall(function() hum.Health=hum.MaxHealth end)
+        end
     end)
+    pcall(function() StarterGui:SetCore("ResetButtonCallback",false) end)
 end
 
 local function stopAntiDie()
     antiDieEnabled=false
+    if dieConn then dieConn:Disconnect();dieConn=nil end
+    pcall(function() StarterGui:SetCore("ResetButtonCallback",true) end)
+end
 
-    for _,c in ipairs(antiDieConnections) do
-        pcall(function() c:Disconnect() end)
-    end
-    antiDieConnections={}
-
-    if antiDieHeartbeat then
-        antiDieHeartbeat:Disconnect()
-        antiDieHeartbeat=nil
-    end
-
-    local char=LP.Character
-    if char then
-        local hum=char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            pcall(function()
-                hum:SetStateEnabled(Enum.HumanoidStateType.Dead,true)
-            end)
+local function startAntiFling()
+    if flingConn then return end
+    antiFlingEnabled=true
+    flingConn=RunService.Heartbeat:Connect(function()
+        if not antiFlingEnabled then return end
+        local char=LP.Character
+        if not char then return end
+        local root=char:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local v=root.AssemblyLinearVelocity
+        if v.Magnitude>120 then
+            root.AssemblyLinearVelocity=Vector3.zero
+            root.AssemblyAngularVelocity=Vector3.zero
         end
-    end
-
-    pcall(function()
-        StarterGui:SetCore("ResetButtonCallback",true)
     end)
 end
 
--- ==================== ANTI-FLING ====================
--- The speed backend above already contains the main fling clamp. This helper
--- keeps the protection available independently for any future root-driving
--- feature without creating another competing movement controller.
-_GACC.antiFlingEnabled=true
-_GACC.setAntiFlingEnabled=function(on)
-    _GACC.antiFlingEnabled=(on==true)
+local function stopAntiFling()
+    antiFlingEnabled=false
+    if flingConn then flingConn:Disconnect();flingConn=nil end
 end
+
+LP.CharacterAdded:Connect(function(char)
+    if not antiDieEnabled then return end
+    local hum=char:WaitForChild("Humanoid",5)
+    if not hum then return end
+    hum:GetPropertyChangedSignal("Health"):Connect(function()
+        if antiDieEnabled and hum.Health<hum.MaxHealth then
+            pcall(function() hum.Health=hum.MaxHealth end)
+        end
+    end)
+end)
+
+_GACC.applyAntiDie=function(char)
+    if not antiDieEnabled or not char then return end
+    local hum=char:FindFirstChildOfClass("Humanoid")
+    if hum then pcall(function() hum.Health=hum.MaxHealth end) end
+end
+_GACC.setAntiFlingEnabled=function(on)
+    if on then startAntiFling() else stopAntiFling() end
+end
+_GACC.antiFlingEnabled=false
+-- =====================================
 
 local function createStealBar()
     for _,n in ipairs({"MoveeStealBar"}) do
@@ -4142,24 +3588,24 @@ local function setupMobileButtons()
             if on then runTPFloor() end
         end,
         CarrySpeed = function(on)
-            manualSpeedOverride=true
-            setSpeedMode(on and "Carry" or "Normal")
-            if _GACC.safeCarryVisual then _GACC.safeCarryVisual(carrySpeedActive) end
-            if _GACC.safeLaggerVisual then _GACC.safeLaggerVisual(laggerModeEnabled) end
-            if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
-            if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
+            carrySpeedActive = on
+            if refreshSpeedModeLabel then refreshSpeedModeLabel() end
+            if _GACC.safeCarryVisual then _GACC.safeCarryVisual(on) end
+            if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(on) end
         end,
         LaggerNormal = function(on)
-            manualSpeedOverride=true
-            setSpeedMode(on and "Lagger" or "Normal")
-            if _GACC.safeLaggerVisual then _GACC.safeLaggerVisual(laggerModeEnabled) end
+            laggerModeEnabled = on
+            if on then carrySpeedActive = false end
+            if refreshSpeedModeLabel then refreshSpeedModeLabel() end
+            if _GACC.safeLaggerVisual then _GACC.safeLaggerVisual(on) end
             if _GACC.safeCarryVisual then _GACC.safeCarryVisual(carrySpeedActive) end
-            if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
+            if mobBtnRefs.lagger then mobBtnRefs.lagger(on) end
             if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(carrySpeedActive) end
         end,
         LaggerCarry = function(on)
-            manualSpeedOverride=true
-            setSpeedMode(on and "Lagger Carry" or "Normal")
+            laggerModeEnabled = on
+            carrySpeedActive = on
+            if refreshSpeedModeLabel then refreshSpeedModeLabel() end
             if _GACC.safeLaggerVisual then _GACC.safeLaggerVisual(laggerModeEnabled) end
             if _GACC.safeCarryVisual then _GACC.safeCarryVisual(carrySpeedActive) end
             if mobBtnRefs.lagger then mobBtnRefs.lagger(laggerModeEnabled) end
@@ -4376,17 +3822,16 @@ end
 local origToggleCarry = toggleCarryMode
 toggleCarryMode = function()
     origToggleCarry()
-    updateMobileButtonState("CarrySpeed", speedMode == "Carry")
-    updateMobileButtonState("LaggerNormal", speedMode == "Lagger")
-    updateMobileButtonState("LaggerCarry", speedMode == "Lagger Carry")
+    updateMobileButtonState("CarrySpeed", carrySpeedActive)
+    updateMobileButtonState("LaggerNormal", laggerModeEnabled and not carrySpeedActive)
+    updateMobileButtonState("LaggerCarry", laggerModeEnabled and carrySpeedActive)
 end
 
 local origToggleLagger = toggleLaggerMode
 toggleLaggerMode = function()
     origToggleLagger()
-    updateMobileButtonState("CarrySpeed", speedMode == "Carry")
-    updateMobileButtonState("LaggerNormal", speedMode == "Lagger")
-    updateMobileButtonState("LaggerCarry", speedMode == "Lagger Carry")
+    updateMobileButtonState("LaggerNormal", laggerModeEnabled and not carrySpeedActive)
+    updateMobileButtonState("LaggerCarry", laggerModeEnabled and carrySpeedActive)
 end
 
 task.spawn(function()
@@ -4398,9 +3843,9 @@ task.spawn(function()
             updateMobileButtonState("BatAimbot", autoBatEnabled)
             updateMobileButtonState("AutoRight", autoRightEnabled)
             updateMobileButtonState("TpDown", false)
-            updateMobileButtonState("CarrySpeed", speedMode == "Carry")
-            updateMobileButtonState("LaggerNormal", speedMode == "Lagger")
-            updateMobileButtonState("LaggerCarry", speedMode == "Lagger Carry")
+            updateMobileButtonState("CarrySpeed", carrySpeedActive)
+            updateMobileButtonState("LaggerNormal", laggerModeEnabled and not carrySpeedActive)
+            updateMobileButtonState("LaggerCarry", laggerModeEnabled and carrySpeedActive)
             updateMobileButtonState("InstantReset", false)
             updateMobileButtonState("TpBat", batDesyncTpEnabled)
         end
@@ -4415,23 +3860,8 @@ pcall(function()
     if type(d.carrySpeed)=="number" and d.carrySpeed>0 then CS=d.carrySpeed end
     if type(d.laggerSpeed)=="number" and d.laggerSpeed>0 then LAGGER_SPEED=d.laggerSpeed end
     if type(d.laggerCarrySpeed)=="number" and d.laggerCarrySpeed>0 then LAGGER_CARRY_SPEED=d.laggerCarrySpeed end
-    if type(d.speedMode)=="string" then
-        setSpeedMode(d.speedMode)
-    elseif type(d.laggerModeEnabled)=="boolean" or type(d.carrySpeedActive)=="boolean" then
-        local savedLagger = d.laggerModeEnabled == true
-        local savedCarry = d.carrySpeedActive == true
-        if savedLagger and savedCarry then
-            setSpeedMode("Lagger Carry")
-        elseif savedLagger then
-            setSpeedMode("Lagger")
-        elseif savedCarry then
-            setSpeedMode("Carry")
-        else
-            setSpeedMode("Normal")
-        end
-    else
-        setSpeedMode("Normal")
-    end
+    if type(d.carrySpeedActive)=="boolean" then carrySpeedActive=d.carrySpeedActive end
+    if type(d.laggerModeEnabled)=="boolean" then laggerModeEnabled=d.laggerModeEnabled end
     if type(d.antiRagdoll)=="boolean" then antiRagdollEnabled=d.antiRagdoll end
     if type(d.infiniteJump)=="boolean" then infJumpEnabled=d.infiniteJump end
     if type(d.infJumpMode)=="string" then infJumpMode=d.infJumpMode end
@@ -4468,7 +3898,8 @@ pcall(function()
     if type(d.antiSummerBaseEnabled)=="boolean" then
         if d.antiSummerBaseEnabled then AntiSummer.enable() else AntiSummer.disable() end
     end
-    if type(d.antiDieEnabled)=="boolean" then antiDieEnabled=d.antiDieEnabled end  -- NEW
+    if type(d.antiDieEnabled)=="boolean" then antiDieEnabled=d.antiDieEnabled end
+    if type(d.antiFlingEnabled)=="boolean" then antiFlingEnabled=d.antiFlingEnabled end
     animEnabled=false
     local savedPack=type(d.animationPack)=="string" and d.animationPack or d.animPack
     if type(savedPack)=="string" then _GACC.extras.setPack(savedPack,false) end
@@ -4515,7 +3946,7 @@ pcall(function()
     if AntiSummer.antiSummerBaseEnabled then
         task.spawn(function() AntiSummer.enable() end)
     end
-    if antiDieEnabled then  -- NEW: start Anti Die on load
+    if antiDieEnabled then
         task.spawn(function()
             task.wait(1)
             startAntiDie()
@@ -4624,8 +4055,7 @@ _GACC.GuiToggleSetters = {}
 
     local GuiHub=Instance.new("ScreenGui")
     GuiHub.Name="RitualHub"; GuiHub.ResetOnSpawn=false
-    GuiHub.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
-    GuiHub.Parent=PlayerGui
+    GuiHub.ZIndexBehavior=Enum.ZIndexBehavior.Sibling; GuiHub.Parent=PlayerGui
     GuiRefs.hub=GuiHub
 
     local Outer=Instance.new("Frame")
@@ -4686,17 +4116,7 @@ _GACC.GuiToggleSetters = {}
         end
     end)
     Outer.Position=UDim2.new(0,20,0,80)
-    do
-        local mp=_GACC.getUiPos and _GACC.getUiPos("menu")
-        if mp then
-            local bad = mp.X.Scale < -0.5 or mp.X.Scale > 1.5
-                or mp.Y.Scale < -0.5 or mp.Y.Scale > 1.5
-                or mp.X.Offset < -500 or mp.X.Offset > 3000
-                or mp.Y.Offset < -500 or mp.Y.Offset > 3000
-            if not bad then Outer.Position=mp end
-        end
-    end
-    Outer.Visible=true
+    do local mp=_GACC.getUiPos and _GACC.getUiPos("menu"); if mp then Outer.Position=mp end end
 
     do 
     local BgCont=Instance.new("Frame")
@@ -5737,58 +5157,15 @@ local profileLine=Instance.new("Frame",userF)
     do
     local sp=CategoryRefs.contents["Speed"]
     local b=mkSection(sp,"SPEED CONFIGURATION",0)
-    addInputRow(b,"Normal Speed",NS,1,function(v)
-        local n=tonumber(v)
-        if n and n>=0 then NS=n end
-        pcall(applyActiveHumanoidSpeed)
-        saveConfig()
-    end)
-    addInputRow(b,"Carry Speed",CS,2,function(v)
-        local n=tonumber(v)
-        if n and n>=0 then CS=n end
-        pcall(applyActiveHumanoidSpeed)
-        saveConfig()
-    end)
-    addInputRow(b,"Lagger Normal",LAGGER_SPEED,3,function(v)
-        local n=tonumber(v)
-        if n and n>=0 then LAGGER_SPEED=n end
-        saveConfig()
-    end)
-    addInputRow(b,"Lagger Carry",LAGGER_CARRY_SPEED,4,function(v)
-        local n=tonumber(v)
-        if n and n>=0 then LAGGER_CARRY_SPEED=n end
-        saveConfig()
-    end)
-
-    local _,carryVisual=addToggleRow(b,"Carry Mode",speedMode=="Carry",5,nil,function(on)
-        manualSpeedOverride=true
-        if on then
-            setSpeedMode("Carry")
-        elseif speedMode=="Carry" then
-            setSpeedMode("Normal")
-        end
-        if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(speedMode=="Carry") end
-        if mobBtnRefs.lagger then mobBtnRefs.lagger(speedMode=="Lagger") end
-        saveConfig()
-    end)
-    _GACC.safeCarryVisual=carryVisual
-
-    local _,laggerVisual=addToggleRow(b,"Lagger Mode",speedMode=="Lagger",6,nil,function(on)
-        manualSpeedOverride=true
-        if on then
-            setSpeedMode("Lagger")
-        elseif speedMode=="Lagger" then
-            setSpeedMode("Normal")
-        end
-        if mobBtnRefs.carrySpeed then mobBtnRefs.carrySpeed(speedMode=="Carry") end
-        if mobBtnRefs.lagger then mobBtnRefs.lagger(speedMode=="Lagger") end
-        saveConfig()
-    end)
-    _GACC.safeLaggerVisual=laggerVisual
-
+    addInputRow(b,"Normal Speed",NS,1,function(v) NS=v; saveConfig() end)
+    addInputRow(b,"Carry Speed",CS,2,function(v) CS=v; saveConfig() end)
+    addInputRow(b,"Lagger Normal",LAGGER_SPEED,3,function(v) LAGGER_SPEED=v; saveConfig() end)
+    addInputRow(b,"Lagger Carry",LAGGER_CARRY_SPEED,4,function(v) LAGGER_CARRY_SPEED=v; saveConfig() end)
+    -- Carry Mode / Lagger Mode rows removed: mobile buttons + keybinds cover
+    -- them. Every _GACC.safeCarryVisual / safeLaggerVisual call site is
+    -- nil-guarded, so they simply no-op now.
     local _,autoCarryVisual=addToggleRow(b,"Auto Carry Speed",_GACC.autoCarrySpeedEnabled,7,nil,function(on)
         _GACC.autoCarrySpeedEnabled=on
-        if on then manualSpeedOverride=false end
         if not on and _GACC.disableAutoCarry then _GACC.disableAutoCarry() end
         saveConfig()
     end)
@@ -6760,10 +6137,9 @@ if infJumpEnabled then startHoldInfJump() end
 if antiRagdollEnabled then startAntiRagdoll() end
 if _GACC.batCounterEnabled then _GACC.startBatCounter() end
 if medusaCounterEnabled then setupMedusa(LP.Character) end
-pcall(applyBackgroundImage)
-if _GACC.playerHighlightEnabled then pcall(_GACC.startESP) end
-pcall(function() CandyApplyCustomSky(currentSkyTheme) end)
-__RitualBootClear()
+applyBackgroundImage()
+if _GACC.playerHighlightEnabled then _GACC.startESP() end
+CandyApplyCustomSky(currentSkyTheme)
 
 -- Apply initial scales
 if _GACC.menuScaleObj then _GACC.menuScaleObj.Scale = menuScale end
@@ -6777,47 +6153,9 @@ if antiDieEnabled then
         startAntiDie()
     end)
 end
-
--- Final GUI recovery: if an executor/game event hid the menu during startup,
--- restore it without touching any feature state.
-
--- Final speed-state watchdog: remove stale movement constraints whenever the
--- authoritative mode changes, including after manual Carry/Lagger toggles.
-do
-    local lastObservedSpeedMode = speedMode
-    RunService.Heartbeat:Connect(function()
-        local mode = syncSpeedMode()
-        if mode ~= lastObservedSpeedMode then
-            lastObservedSpeedMode = mode
-            local char=LP.Character
-            local root=char and char:FindFirstChild("HumanoidRootPart")
-            if root then
-                pcall(function()
-                    local lv=root:FindFirstChild("_RHSpeedLV")
-                    if lv then lv:Destroy() end
-                    local v=root.AssemblyLinearVelocity
-                    root.AssemblyLinearVelocity=Vector3.new(0,v.Y,0)
-                end)
-            end
-        end
+if antiFlingEnabled then
+    task.spawn(function()
+        task.wait(1.5)
+        startAntiFling()
     end)
 end
-
-task.defer(function()
-    pcall(function()
-        local pg = LP and LP:FindFirstChild("PlayerGui")
-        local gui = pg and pg:FindFirstChild("RitualHub")
-        if not gui then gui = game:GetService("CoreGui"):FindFirstChild("RitualHub") end
-        if gui then
-            gui.Enabled = true
-            local outer = gui:FindFirstChild("Outer", true)
-            if outer and outer:IsA("GuiObject") then
-                outer.Visible = true
-                local pos = outer.Position
-                if pos.X.Offset < -500 or pos.X.Offset > 3000 or pos.Y.Offset < -500 or pos.Y.Offset > 3000 then
-                    outer.Position = UDim2.new(0,20,0,80)
-                end
-            end
-        end
-    end)
-end)
