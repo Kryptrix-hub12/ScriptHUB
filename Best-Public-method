@@ -470,6 +470,8 @@ local V = {
     CarpetSpeed = false,
     CarpetSpeedValue = 140,
     CarpetSpeedKey = "Q",
+    StealSpeedBoost = true,
+    StealSpeedBoostValue = 29,
     InfJump = true,
     AutoKickOnSteal = false,
     FOV = 80,
@@ -641,6 +643,8 @@ do
     _G.StickyCarpetSpeed = i.CarpetSpeed == true
     _G.StickyCarpetSpeedValue = math.clamp(tonumber(i.CarpetSpeedValue) or 140, 20, 400)
     _G.StickyCarpetSpeedKeyName = type(i.CarpetSpeedKey) == "string" and i.CarpetSpeedKey or "Q"
+    _G.StickyStealSpeedBoost = i.StealSpeedBoost ~= false
+    _G.StickyStealSpeedBoostValue = math.clamp(tonumber(i.StealSpeedBoostValue) or 29, 1, 400)
     _G.StickyInfJump = i.InfJump ~= false
     _G.StickyAutoKickOnSteal = i.AutoKickOnSteal == true
     _G.StickyFOV = tonumber(i.FOV) or 80
@@ -651,6 +655,8 @@ do
 
     local function syncGlobalsToConfig()
         i.CarpetSpeedValue = math.clamp(tonumber(_G.StickyCarpetSpeedValue) or 140, 20, 400)
+        i.StealSpeedBoostValue = math.clamp(tonumber(_G.StickyStealSpeedBoostValue) or 29, 1, 400)
+        i.StealSpeedBoost = _G.StickyStealSpeedBoost == true
         i.FOV = tonumber(_G.StickyFOV) or i.FOV
         i.ResetCooldown = tonumber(_G.StickyResetCooldown) or i.ResetCooldown
         i.ResetFlingTime = tonumber(_G.StickyResetFlingTime) or i.ResetFlingTime
@@ -993,6 +999,135 @@ do
             end
         end)
     end)()
+
+    -- Speed Boost on Steal
+    -- Uses the player's Stealing attribute first, with the same carry-marker
+    -- fallbacks used by the requested logic. The value is editable in Settings.
+    do
+        local UIS = game:GetService("UserInputService")
+        local RS = game:GetService("RunService")
+        local stealSpeedConn
+
+        local function hasBrainrotInHand(character)
+            local ok, value = pcall(function()
+                return C:GetAttribute("Stealing")
+            end)
+            if ok and value == true then
+                return true
+            end
+
+            local ok2, value2 = pcall(function()
+                return character:GetAttribute("Stealing")
+            end)
+            if ok2 and value2 == true then
+                return true
+            end
+
+            for _, name in ipairs({
+                "Carrying",
+                "IsCarrying",
+                "Grabbed",
+                "Holding",
+                "StealHold",
+                "HasGrab"
+            }) do
+                local obj = character:FindFirstChild(name, true)
+                if obj then
+                    if obj:IsA("BoolValue") and obj.Value then
+                        return true
+                    elseif obj:IsA("ObjectValue") and obj.Value then
+                        return true
+                    elseif obj:IsA("StringValue") and obj.Value ~= "" then
+                        return true
+                    end
+                end
+            end
+
+            for _, child in ipairs(character:GetChildren()) do
+                if child:IsA("Model") then
+                    local name = child.Name:lower()
+                    if name:find("brainrot", 1, true)
+                        or name:find("animal", 1, true)
+                        or name:find("carry", 1, true)
+                        or name:find("grab", 1, true)
+                        or name:find("steal", 1, true)
+                        or name:find("hold", 1, true) then
+                        return true
+                    end
+                end
+            end
+
+            return false
+        end
+
+        local function boostSpeed(hrp, humanoid, speed)
+            local direction = humanoid.MoveDirection
+            if direction.Magnitude <= 0 then
+                return
+            end
+
+            local mass = hrp.AssemblyMass or 1
+            local current = hrp.AssemblyLinearVelocity
+            local desired = Vector3.new(
+                direction.X * speed,
+                current.Y,
+                direction.Z * speed
+            )
+            local delta = desired - current
+
+            pcall(function()
+                hrp:ApplyImpulse(Vector3.new(delta.X, 0, delta.Z) * mass)
+            end)
+        end
+
+        local function startStealSpeedBoost()
+            if stealSpeedConn then
+                stealSpeedConn:Disconnect()
+                stealSpeedConn = nil
+            end
+            if _G.StickyStealSpeedBoost ~= true then
+                return
+            end
+
+            stealSpeedConn = RS.RenderStepped:Connect(function()
+                if _G.StickyStealSpeedBoost ~= true then
+                    return
+                end
+
+                local character = C.Character
+                if not character then return end
+
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                local hrp = character:FindFirstChild("HumanoidRootPart")
+                if not humanoid or not hrp then return end
+
+                if hasBrainrotInHand(character) then
+                    local speed = math.clamp(
+                        tonumber(_G.StickyStealSpeedBoostValue) or 29,
+                        1,
+                        400
+                    )
+                    boostSpeed(hrp, humanoid, speed)
+                end
+            end)
+        end
+
+        _G.StickySetStealSpeedBoost = function(enabled)
+            _G.StickyStealSpeedBoost = enabled == true
+            if stealSpeedConn then
+                stealSpeedConn:Disconnect()
+                stealSpeedConn = nil
+            end
+            if _G.StickyStealSpeedBoost then
+                startStealSpeedBoost()
+            end
+            if _G.StickySaveConfigNow then
+                task.spawn(_G.StickySaveConfigNow)
+            end
+        end
+
+        startStealSpeedBoost()
+    end
 
     local playerESPEnabled = Config.PlayerESP == true
     local playerBillboards = {}
@@ -2285,7 +2420,6 @@ do
                 pcall(function() hum.RequiresNeck = false end)
                 pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false) end)
                 pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false) end)
-
                 pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false) end)
                 pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Physics, false) end)
             end
@@ -4718,6 +4852,48 @@ task.spawn(function()
             paintCarpet(_G.StickyCarpetSpeed == true)
         end)
     end
+
+    do
+        local stealSpeedRow = HG(lG, "Speed Boost on Steal", 336 * AG)
+
+        local function paintStealSpeed(on)
+            if on then
+                stealSpeedRow.button.BackgroundColor3 = b.GREEN1
+                stealSpeedRow.knob.BackgroundTransparency = 0
+                stealSpeedRow.stateLabel.Text = "ON"
+                stealSpeedRow.stateLabel.TextColor3 = Color3.fromRGB(232, 255, 240)
+                stealSpeedRow.stroke.Color = b.GREEN_STROKE
+                stealSpeedRow.stroke.Transparency = 0.22
+            else
+                stealSpeedRow.button.BackgroundColor3 = b.OFF_BG
+                stealSpeedRow.knob.BackgroundTransparency = 1
+                stealSpeedRow.stateLabel.Text = "OFF"
+                stealSpeedRow.stateLabel.TextColor3 = b.OFF_TEXT
+                stealSpeedRow.stroke.Color = b.AQUA_STROKE
+                stealSpeedRow.stroke.Transparency = 0.55
+            end
+            if stealSpeedRow.rowStroke then
+                stealSpeedRow.rowStroke.Transparency = on and 0.38 or 0.52
+            end
+        end
+
+        paintStealSpeed(_G.StickyStealSpeedBoost == true)
+
+        stealSpeedRow.button.MouseButton1Click:Connect(function()
+            local on = not (_G.StickyStealSpeedBoost == true)
+            if _G.StickySetStealSpeedBoost then
+                _G.StickySetStealSpeedBoost(on)
+            else
+                _G.StickyStealSpeedBoost = on
+            end
+            paintStealSpeed(on)
+        end)
+
+        _G.StickyOnBoot(function()
+            paintStealSpeed(_G.StickyStealSpeedBoost == true)
+        end)
+    end
+
     do
         local outerPanel = P.TargetControlsFrame
         local tabContent = outerPanel:FindFirstChild("TabContent")
@@ -4969,6 +5145,18 @@ task.spawn(function()
             end
             if _G.StickySaveConfigNow then task.spawn(_G.StickySaveConfigNow) end
         end)
+
+        settingsInputRow(settingsInner, "Steal Speed", 252, _G.StickyStealSpeedBoostValue or 29, function(inp)
+            local val = tonumber(inp.Text)
+            if val then
+                _G.StickyStealSpeedBoostValue = math.clamp(val, 1, 400)
+                inp.Text = tostring(_G.StickyStealSpeedBoostValue)
+            else
+                inp.Text = tostring(_G.StickyStealSpeedBoostValue or 29)
+            end
+            if _G.StickySaveConfigNow then task.spawn(_G.StickySaveConfigNow) end
+        end)
+
         local function settingsActionRow(parent, labelText, order, initialText, onPress)
             local fr = Instance.new("Frame", parent)
             fr.Size = UDim2.new(1, 0, 0, 38)
