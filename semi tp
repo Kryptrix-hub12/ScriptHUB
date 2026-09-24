@@ -862,7 +862,7 @@ function HalfwaySteal.SSDoTeleport()
                 if targetHitbox then
                     local prevSpeedState = _G.speedBoostEnabled
                     _G.speedBoostEnabled = false
-                    local speedVal = PotionEnabled and 33.5 or 28
+                    local speedVal = math.clamp(tonumber(currentSpeed) or 25, 16, 100)
                     pcall(function()
                         local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
                         if h then h:UnequipTools() end
@@ -977,7 +977,7 @@ function HalfwaySteal.SSDoTeleport()
                 if targetHitbox then
                     local prevSpeedState = _G.speedBoostEnabled
                     _G.speedBoostEnabled = false
-                    local speedVal = PotionEnabled and 33.5 or 28
+                    local speedVal = math.clamp(tonumber(currentSpeed) or 25, 16, 100)
                     pcall(function()
                         local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
                         if h then h:UnequipTools() end
@@ -1092,7 +1092,7 @@ function HalfwaySteal.SSDoTeleport()
                 if targetHitbox then
                     local prevSpeedState = _G.speedBoostEnabled
                     _G.speedBoostEnabled = false
-                    local speedVal = PotionEnabled and 33.5 or 28
+                    local speedVal = math.clamp(tonumber(currentSpeed) or 25, 16, 100)
                     pcall(function()
                         local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
                         if h then h:UnequipTools() end
@@ -1207,7 +1207,7 @@ function HalfwaySteal.SSDoTeleport()
                 if targetHitbox then
                     local prevSpeedState = _G.speedBoostEnabled
                     _G.speedBoostEnabled = false
-                    local speedVal = PotionEnabled and 33.5 or 28
+                    local speedVal = math.clamp(tonumber(currentSpeed) or 25, 16, 100)
                     pcall(function()
                         local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
                         if h then h:UnequipTools() end
@@ -1326,7 +1326,7 @@ function HalfwaySteal.SSDoTeleport()
                 if targetHitbox then
                     local prevSpeedState = _G.speedBoostEnabled
                     _G.speedBoostEnabled = false
-                    local speedVal = PotionEnabled and 33.5 or 28
+                    local speedVal = math.clamp(tonumber(currentSpeed) or 25, 16, 100)
                     pcall(function()
                         local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
                         if h then h:UnequipTools() end
@@ -1622,7 +1622,7 @@ task.spawn(function()
                     local part = desc.Parent:IsA("BasePart") and desc.Parent or desc.Parent:FindFirstChildWhichIsA("BasePart", true)
                     if part then
                         currentObjects[part] = true
-                        local status = isAllow and "X" or "â˜‘ï¸"
+                        local status = isAllow and "X" or "☑️"
                         if activeHubs[part] then
                             local label = activeHubs[part].Frame.TextLabel
                             if label.Text ~= status then label.Text = status end
@@ -1781,7 +1781,7 @@ end)
 local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(1, 0, 1, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "Leaked By Sticky!!\nbest free source leakerðŸ˜˜"
+TitleText.Text = "Leaked By Sticky!!\nbest free source leaker😘"
 TitleText.TextColor3 = Color3.fromRGB(255, 255, 255)
 TitleText.Font = MAIN_FONT
 TitleText.TextSize = 12
