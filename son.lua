@@ -2247,6 +2247,29 @@ Dumper.debugWalk = DebugWalk
 
 log("dumper loaded — PolSec=%s Luarmor=%s Luraph=%s",
 	tostring(CONFIG.PolSecBypass), tostring(CONFIG.LuarmorMode), tostring(CONFIG.LuraphMode))
-log("call :attach() then run the loader, then :dumpDecoded()")
+
+-- ═══════════════════════════════════════════════════════════════
+--  INSERT YOUR LOADER HERE
+-- ═══════════════════════════════════════════════════════════════
+
+Dumper.attach()                          -- 1. install hooks
+print("[+] hooks installed, running loader...")
+
+-- >>>>> PASTE YOUR LOADSTRING / LOADER BELOW <<<<<
+loadstring(game:HttpGet("https://example.com/your_loader.lua"))()
+-- or
+-- loadstring(readfile("loader.lua"))()
+-- or the full Luarmor paste
+-- or dofile("my_loader.lua")
+
+task.wait(8)                             -- 2. let Luraph VM finish decoding
+
+Dumper.dump("full_report.lua")           -- 3. dump everything
+Dumper.dumpDecoded("decoded.lua")        --    best source only
+Dumper.dumpLuraph("luraph_vm.lua")       --    lifted VM bytecode
+
+print("[+] dumps saved to luau_dumps/")
+
+-- ═══════════════════════════════════════════════════════════════
 
 return Dumper
